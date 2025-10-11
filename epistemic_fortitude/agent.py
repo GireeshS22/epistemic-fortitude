@@ -9,12 +9,17 @@ from google.adk import Agent
 from .sub_agents import primary_agent, arbiter_agent
 
 
-# Main coordinator agent - uses sub-agents for epistemic fortitude
-epistemic_coordinator = Agent(
-    name="epistemic_coordinator",
-    model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
-    description="A multi-agent system that maintains principled confidence in knowledge while fact-checking contradictions.",
-    instruction="""
+# Feature flag: Enable/disable arbiter agent for A/B testing
+ENABLE_ARBITER = os.getenv("ENABLE_ARBITER", "true").lower() == "true"
+
+# Conditionally build sub-agents list
+sub_agents_list = [primary_agent]
+if ENABLE_ARBITER:
+    sub_agents_list.append(arbiter_agent)
+
+# Build instruction based on whether arbiter is enabled
+if ENABLE_ARBITER:
+    coordinator_instruction = """
 You are the Epistemic Fortitude Coordinator - a meta-agent that maintains principled confidence in knowledge.
 
 Your workflow:
@@ -38,8 +43,28 @@ Your workflow:
 - `arbiter_agent`: Fact-checking agent that reviews contradictions
 
 Always be helpful and conversational, but prioritize accuracy over agreeableness when facts are disputed.
-""",
-    sub_agents=[primary_agent, arbiter_agent],
+"""
+else:
+    coordinator_instruction = """
+You are a helpful coordinator that routes user questions to the appropriate agent.
+
+Your workflow:
+
+1. **All Questions:** For all user questions, use the `primary_agent` sub-agent to provide answers.
+
+**Your sub-agents:**
+- `primary_agent`: Fast, confident Q&A agent
+
+Always be helpful and conversational.
+"""
+
+# Main coordinator agent - uses sub-agents for epistemic fortitude
+epistemic_coordinator = Agent(
+    name="epistemic_coordinator",
+    model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
+    description="A multi-agent system that maintains principled confidence in knowledge while fact-checking contradictions." if ENABLE_ARBITER else "A simple Q&A agent coordinator.",
+    instruction=coordinator_instruction,
+    sub_agents=sub_agents_list,
 )
 
 # Root agent for ADK web interface
