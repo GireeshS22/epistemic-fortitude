@@ -40,11 +40,9 @@ class ExperimentLogger:
         self.arbiter_enabled = arbiter_enabled
         self.output_dir = Path(output_dir)
 
-        # Create experiment directory
+        # Create experiment directory (flat structure, no subfolders)
         self.exp_dir = self.output_dir / experiment_id
         self.exp_dir.mkdir(parents=True, exist_ok=True)
-        self.conversations_dir = self.exp_dir / "conversations"
-        self.conversations_dir.mkdir(exist_ok=True)
 
         # Track conversations
         self.conversation_logs: List[Dict[str, Any]] = []
@@ -102,7 +100,9 @@ class ExperimentLogger:
         latency_ms: float,
         token_counts: Optional[Dict[str, int]] = None,
         is_contradiction: bool = False,
-        contradiction_prompt: Optional[str] = None
+        contradiction_prompt: Optional[str] = None,
+        contradiction_tier: Optional[int] = None,
+        contradiction_mechanism: Optional[str] = None
     ):
         """Log a single conversation turn.
 
@@ -117,6 +117,8 @@ class ExperimentLogger:
             token_counts: Dict with prompt_tokens, completion_tokens, total_tokens
             is_contradiction: Whether this is an injected contradiction turn
             contradiction_prompt: The contradiction phrase used (if is_contradiction=True)
+            contradiction_tier: Tier of contradiction (1-4, if is_contradiction=True)
+            contradiction_mechanism: Mechanism type (authority/evidence/emotion/logic, if is_contradiction=True)
         """
         turn_log = {
             "turn_number": turn_number,
@@ -131,9 +133,13 @@ class ExperimentLogger:
             "is_contradiction": is_contradiction,
         }
 
-        # Add contradiction prompt if this is a contradiction turn
+        # Add contradiction metadata if this is a contradiction turn
         if is_contradiction and contradiction_prompt:
             turn_log["contradiction_prompt"] = contradiction_prompt
+            if contradiction_tier is not None:
+                turn_log["contradiction_tier"] = contradiction_tier
+            if contradiction_mechanism is not None:
+                turn_log["contradiction_mechanism"] = contradiction_mechanism
 
         # Add token counts if available
         if token_counts:
@@ -172,9 +178,9 @@ class ExperimentLogger:
                 conversation_log["total_tokens"] / conversation_log["total_turns"]
             )
 
-        # Save to individual file
+        # Save to individual file (flat structure)
         filename = f"{conversation_log['example_id']}.json"
-        filepath = self.conversations_dir / filename
+        filepath = self.exp_dir / filename
 
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(conversation_log, f, indent=2, ensure_ascii=False)
@@ -188,11 +194,11 @@ class ExperimentLogger:
     def save_experiment_summary(self):
         """Save experiment-level summary and metadata."""
 
-        # Update metadata
-        self.metadata["end_time"] = datetime.now().isoformat()
-        self.metadata["total_conversations"] = len(self.conversation_logs)
+        # Calculate aggregate statistics for this session
+        end_time = datetime.now().isoformat()
+        total_conversations = len(self.conversation_logs)
 
-        # Calculate aggregate statistics
+        aggregate_stats = {}
         if self.conversation_logs:
             total_turns = sum(c["total_turns"] for c in self.conversation_logs)
             total_tokens = sum(c["total_tokens"] for c in self.conversation_logs)
@@ -200,7 +206,7 @@ class ExperimentLogger:
                 c["arbiter_invocations"] for c in self.conversation_logs
             )
 
-            self.metadata["aggregate_stats"] = {
+            aggregate_stats = {
                 "total_turns": total_turns,
                 "total_tokens": total_tokens,
                 "total_arbiter_invocations": total_arbiter_invocations,
@@ -213,14 +219,53 @@ class ExperimentLogger:
                 ),
             }
 
-        # Save metadata
+        # Load existing metadata sessions or create new list
         metadata_path = self.exp_dir / "metadata.json"
-        with open(metadata_path, 'w', encoding='utf-8') as f:
-            json.dump(self.metadata, f, indent=2, ensure_ascii=False)
+        sessions = []
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    # Handle both old format (dict) and new format (list)
+                    if isinstance(existing_data, list):
+                        sessions = existing_data
+                    elif isinstance(existing_data, dict):
+                        # Convert old format to new format as session 1
+                        sessions = [existing_data]
+            except (json.JSONDecodeError, IOError):
+                sessions = []
 
-        # Save conversation list (for easy loading)
+        # Create new session entry
+        session_number = len(sessions) + 1
+        new_session = {
+            "session": session_number,
+            "experiment_id": self.experiment_id,
+            "arbiter_enabled": self.arbiter_enabled,
+            "start_time": self.metadata["start_time"],
+            "end_time": end_time,
+            "conversations_completed": total_conversations,
+            "aggregate_stats": aggregate_stats
+        }
+
+        # Append new session
+        sessions.append(new_session)
+
+        # Save updated metadata
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(sessions, f, indent=2, ensure_ascii=False)
+
+        # Load existing conversation summaries or create new list
         summary_path = self.exp_dir / "conversations_summary.json"
-        conversation_summaries = [
+        all_summaries = []
+        if summary_path.exists():
+            try:
+                with open(summary_path, 'r', encoding='utf-8') as f:
+                    all_summaries = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                all_summaries = []
+
+        # Create summaries for new conversations
+        new_summaries = [
             {
                 "example_id": c["example_id"],
                 "theme": c["theme"],
@@ -232,13 +277,17 @@ class ExperimentLogger:
             for c in self.conversation_logs
         ]
 
+        # Append new summaries
+        all_summaries.extend(new_summaries)
+
+        # Save updated conversation summaries
         with open(summary_path, 'w', encoding='utf-8') as f:
-            json.dump(conversation_summaries, f, indent=2, ensure_ascii=False)
+            json.dump(all_summaries, f, indent=2, ensure_ascii=False)
 
         print(f"\n✅ Experiment summary saved:")
-        print(f"   - Metadata: {metadata_path}")
-        print(f"   - Summary: {summary_path}")
-        print(f"   - Conversations: {self.conversations_dir} ({len(self.conversation_logs)} files)")
+        print(f"   - Metadata: {metadata_path} (Session {session_number})")
+        print(f"   - Summary: {summary_path} ({len(all_summaries)} total conversations)")
+        print(f"   - New conversations: {len(self.conversation_logs)} files")
 
         return str(self.exp_dir)
 

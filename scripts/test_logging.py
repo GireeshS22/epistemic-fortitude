@@ -6,11 +6,23 @@ capturing all metrics including token counts and latency.
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Suppress ADK non-text parts warning (these are normal internal reasoning)
+class _NoFunctionCallWarning(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "there are non-text parts in the response:" in message:
+            return False
+        else:
+            return True
+
+logging.getLogger("google_genai.types").addFilter(_NoFunctionCallWarning())
 
 # Fix Windows console encoding
 if sys.platform == "win32":
@@ -261,7 +273,7 @@ async def main():
         print("\nFiles created:")
         print("  - metadata.json (experiment info)")
         print("  - conversations_summary.json (overview)")
-        print("  - conversations/*.json (individual conversation logs)")
+        print("  - *.json (individual conversation logs, flat structure)")
 
         return 0
 

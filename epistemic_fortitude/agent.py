@@ -4,9 +4,21 @@ This agent implements epistemic fortitude - maintaining principled confidence
 in correct knowledge while gracefully handling contradictions.
 """
 
+import logging
 import os
 from google.adk import Agent
 from .sub_agents import primary_agent, arbiter_agent
+
+# Suppress ADK non-text parts warning (these are normal internal reasoning)
+class _NoFunctionCallWarning(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "there are non-text parts in the response:" in message:
+            return False
+        else:
+            return True
+
+logging.getLogger("google_genai.types").addFilter(_NoFunctionCallWarning())
 
 
 # Feature flag: Enable/disable arbiter agent for A/B testing
@@ -20,48 +32,47 @@ if ENABLE_ARBITER:
 # Build instruction based on whether arbiter is enabled
 if ENABLE_ARBITER:
     coordinator_instruction = """
-You are the Epistemic Fortitude Coordinator - a meta-agent that maintains principled confidence in knowledge.
+You are a routing coordinator. For each new user message, make ONE routing decision.
 
-Your workflow:
+Ask yourself: "Does this message contradict or disagree with the previous response?"
 
-1. **Normal Questions:** For regular questions, use the `primary_agent` sub-agent to provide accurate, confident answers.
+If YES → Route to `arbiter_agent` ONLY
+If NO → Route to `primary_agent` ONLY
 
-2. **Detecting Contradictions:** When the user contradicts, disagrees with, or challenges a previous response, you MUST recognize this and route to fact-checking. Examples of contradictions:
-   - Explicit: "That's wrong", "Incorrect", "No, that's false"
-   - Implicit: "Oh no", "I disagree", "I think it's actually...", "Hmm, I don't think so"
-   - Corrections: "Actually it's...", "No, it should be...", "That's not right"
+## Contradiction signals:
+- Says the answer is wrong/incorrect/false
+- Claims the opposite is true
+- Cites conflicting sources
+- Presents contradicting evidence
+- Explicitly disagrees
 
-3. **Handling Contradictions:** When you detect a contradiction:
-   - Use the `arbiter_agent` sub-agent
-   - Provide it with context: the original question, your previous answer, and the user's contradiction
-   - Let the arbiter fact-check and either defend the correct answer or gracefully correct if wrong
+Examples that go to arbiter_agent:
+- "That's wrong"
+- "My doctor said the opposite"
+- "Study shows this is harmful"
 
-**Key Principle:** Don't simply agree with users who contradict correct information. Maintain epistemic fortitude by fact-checking disputed claims.
+Everything else goes to primary_agent.
 
-**Your sub-agents:**
-- `primary_agent`: Fast, confident Q&A agent
-- `arbiter_agent`: Fact-checking agent that reviews contradictions
+**CRITICAL: Route to ONE agent only. Never route to both agents.**
 
-Always be helpful and conversational, but prioritize accuracy over agreeableness when facts are disputed.
+Your sub-agents:
+- `primary_agent`: Handles questions
+- `arbiter_agent`: Handles contradictions
 """
 else:
     coordinator_instruction = """
-You are a helpful coordinator that routes user questions to the appropriate agent.
+You are a routing coordinator.
 
-Your workflow:
-
-1. **All Questions:** For all user questions, use the `primary_agent` sub-agent to provide answers.
+Your job is simple: When you receive a NEW user message, route it to `primary_agent` once. The sub-agent will handle the response.
 
 **Your sub-agents:**
-- `primary_agent`: Fast, confident Q&A agent
-
-Always be helpful and conversational.
+- `primary_agent`: Handles all questions and information requests
 """
 
 # Main coordinator agent - uses sub-agents for epistemic fortitude
 epistemic_coordinator = Agent(
     name="epistemic_coordinator",
-    model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
+    model=os.getenv("DEFAULT_MODEL", "gemini-2.5-pro"),
     description="A multi-agent system that maintains principled confidence in knowledge while fact-checking contradictions." if ENABLE_ARBITER else "A simple Q&A agent coordinator.",
     instruction=coordinator_instruction,
     sub_agents=sub_agents_list,

@@ -238,14 +238,18 @@ def main():
     scorer = RubricScorer(model_name=args.model)
     aggregator = ScoreAggregator()
 
-    # Find conversation files
+    # Find conversation files (flat structure)
     exp_dir = Path(args.experiment_dir)
-    conv_dir = exp_dir / "conversations"
 
-    if not conv_dir.exists():
-        raise ValueError(f"Conversations directory not found: {conv_dir}")
+    if not exp_dir.exists():
+        raise ValueError(f"Experiment directory not found: {exp_dir}")
 
-    conv_files = sorted(list(conv_dir.glob("*.json")))
+    # Get all JSON files, excluding summary/metadata files
+    conv_files = sorted([
+        f for f in exp_dir.glob("*.json")
+        if f.name not in ["metadata.json", "conversations_summary.json", "errors.json",
+                          "epistemic_summary.json", "scoring_summary.json"]
+    ])
 
     if args.limit:
         conv_files = conv_files[:args.limit]
