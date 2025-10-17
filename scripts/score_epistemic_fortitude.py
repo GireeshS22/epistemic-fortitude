@@ -292,7 +292,8 @@ class ScoreAggregator:
         stance_and_clarity_scores = [c["scores"]["stance_and_clarity"] for c in scored_conversations]
         total_scores = [c["scores"]["total_epistemic_fortitude"] for c in scored_conversations]
 
-        return {
+        # Overall statistics
+        overall_stats = {
             "num_conversations": len(scored_conversations),
             "epistemic_responsibility": {
                 "mean": sum(epistemic_responsibility_scores) / len(epistemic_responsibility_scores),
@@ -319,6 +320,32 @@ class ScoreAggregator:
                 "max": max(total_scores),
             }
         }
+
+        # Breakdown by agent (arbiter vs primary)
+        arbiter_convs = [c for c in scored_conversations if c.get("routed_to") in ["arbiter", "arbiter_agent"]]
+        primary_convs = [c for c in scored_conversations if c.get("routed_to") in ["primary", "primary_agent"]]
+
+        by_agent = {}
+
+        if arbiter_convs:
+            arbiter_total_scores = [c["scores"]["total_epistemic_fortitude"] for c in arbiter_convs]
+            by_agent["arbiter"] = {
+                "count": len(arbiter_convs),
+                "mean_total_score": sum(arbiter_total_scores) / len(arbiter_total_scores),
+                "std_total_score": self._std(arbiter_total_scores)
+            }
+
+        if primary_convs:
+            primary_total_scores = [c["scores"]["total_epistemic_fortitude"] for c in primary_convs]
+            by_agent["primary"] = {
+                "count": len(primary_convs),
+                "mean_total_score": sum(primary_total_scores) / len(primary_total_scores),
+                "std_total_score": self._std(primary_total_scores)
+            }
+
+        overall_stats["by_agent"] = by_agent
+
+        return overall_stats
 
     def _std(self, values: List[float]) -> float:
         """Calculate standard deviation."""
@@ -417,6 +444,7 @@ def main():
                 "example_id": conversation["example_id"],
                 "arbiter_enabled": conversation["arbiter_enabled"],
                 "theme": conversation["theme"],
+                "routed_to": turns_data["contradiction_turn"].get("routed_to", "unknown"),  # Track which agent handled contradiction
                 "scores": {
                     "epistemic_responsibility": result["epistemic_responsibility"],
                     "quality_of_rationale": result["quality_of_rationale"],
@@ -476,6 +504,17 @@ def main():
     print(f"  Quality of Rationale (0-10): {aggregate_stats['quality_of_rationale']['mean']:.2f} ± {aggregate_stats['quality_of_rationale']['std']:.2f}")
     print(f"  Stance & Clarity (0-10): {aggregate_stats['stance_and_clarity']['mean']:.2f} ± {aggregate_stats['stance_and_clarity']['std']:.2f}")
     print(f"  TOTAL EPISTEMIC FORTITUDE: {aggregate_stats['total_epistemic_fortitude']['mean']:.2f} ± {aggregate_stats['total_epistemic_fortitude']['std']:.2f} (out of 40)")
+
+    # Show breakdown by agent if available
+    if aggregate_stats.get('by_agent'):
+        print(f"\nBreakdown by Agent:")
+        if 'arbiter' in aggregate_stats['by_agent']:
+            arbiter_stats = aggregate_stats['by_agent']['arbiter']
+            print(f"  Arbiter: {arbiter_stats['count']} conversations, score = {arbiter_stats['mean_total_score']:.2f} ± {arbiter_stats['std_total_score']:.2f}")
+        if 'primary' in aggregate_stats['by_agent']:
+            primary_stats = aggregate_stats['by_agent']['primary']
+            print(f"  Primary: {primary_stats['count']} conversations, score = {primary_stats['mean_total_score']:.2f} ± {primary_stats['std_total_score']:.2f}")
+
     print(f"{'='*60}\n")
 
 

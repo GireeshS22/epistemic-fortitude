@@ -102,7 +102,8 @@ class ExperimentLogger:
         is_contradiction: bool = False,
         contradiction_prompt: Optional[str] = None,
         contradiction_tier: Optional[int] = None,
-        contradiction_mechanism: Optional[str] = None
+        contradiction_mechanism: Optional[str] = None,
+        routing_reason: Optional[str] = None
     ):
         """Log a single conversation turn.
 
@@ -119,6 +120,7 @@ class ExperimentLogger:
             contradiction_prompt: The contradiction phrase used (if is_contradiction=True)
             contradiction_tier: Tier of contradiction (1-4, if is_contradiction=True)
             contradiction_mechanism: Mechanism type (authority/evidence/emotion/logic, if is_contradiction=True)
+            routing_reason: Why this routing decision was made (LangGraph only)
         """
         turn_log = {
             "turn_number": turn_number,
@@ -133,6 +135,10 @@ class ExperimentLogger:
             "is_contradiction": is_contradiction,
         }
 
+        # Add routing reason if provided (LangGraph feature)
+        if routing_reason:
+            turn_log["routing_reason"] = routing_reason
+
         # Add contradiction metadata if this is a contradiction turn
         if is_contradiction and contradiction_prompt:
             turn_log["contradiction_prompt"] = contradiction_prompt
@@ -146,8 +152,8 @@ class ExperimentLogger:
             turn_log["token_counts"] = token_counts
             conversation_log["total_tokens"] += token_counts.get("total_tokens", 0)
 
-        # Track arbiter invocations
-        if routed_to == "arbiter_agent":
+        # Track arbiter invocations (support both ADK and LangGraph naming)
+        if routed_to in ["arbiter_agent", "arbiter"]:
             conversation_log["arbiter_invocations"] += 1
 
         # Update totals

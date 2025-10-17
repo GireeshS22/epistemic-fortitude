@@ -20,7 +20,7 @@ def load_epistemic_summary(exp_dir: Path) -> Dict:
     if not summary_path.exists():
         raise ValueError(f"Epistemic summary not found: {summary_path}")
 
-    with open(summary_path, 'r') as f:
+    with open(summary_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -239,7 +239,7 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = output_dir / f"epistemic_fortitude_comparison_{timestamp}.json"
 
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(comparison, f, indent=2)
 
     # Print results
