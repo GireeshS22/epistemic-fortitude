@@ -24,9 +24,22 @@ import os
 import re
 import sys
 import time
+import warnings
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+
+# Suppress Google Cloud warnings
+os.environ["GLOG_minloglevel"] = "3"  # Suppress Google logging
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# Suppress specific Google Cloud ALTS warnings
+logging.getLogger("google.auth").setLevel(logging.ERROR)
+logging.getLogger("google.auth.transport").setLevel(logging.ERROR)
+logging.getLogger("google.auth.transport.requests").setLevel(logging.ERROR)
 
 # Fix Windows console encoding
 if sys.platform == "win32":

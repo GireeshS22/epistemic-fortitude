@@ -526,6 +526,11 @@ def main():
         default=None,
         help="Limit number of conversations to score (for testing)"
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip conversations that have already been scored (check epistemic_scores/ folder)"
+    )
     args = parser.parse_args()
 
     # Load environment
@@ -555,6 +560,19 @@ def main():
         if f.name not in ["metadata.json", "conversations_summary.json", "errors.json",
                           "epistemic_summary.json", "scoring_summary.json"]
     ])
+
+    # Filter out already scored conversations if --skip-existing is used
+    if args.skip_existing:
+        scores_dir = exp_dir / "epistemic_scores"
+        if scores_dir.exists():
+            existing_scores = {f.stem for f in scores_dir.glob("*.json")}
+            original_count = len(conv_files)
+            conv_files = [f for f in conv_files if f.stem not in existing_scores]
+            skipped_count = original_count - len(conv_files)
+            if skipped_count > 0:
+                print(f"✓ Skipping {skipped_count} already scored conversations")
+        else:
+            print("✓ No existing scores found, will score all conversations")
 
     if args.limit:
         conv_files = conv_files[:args.limit]
@@ -630,15 +648,35 @@ def main():
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(scored, f, indent=2, ensure_ascii=False)
 
-    # Calculate and save aggregate statistics
-    aggregate_stats = aggregator.aggregate_scores(scored_conversations)
+    # Load existing scores if --skip-existing was used
+    all_scored_conversations = scored_conversations.copy()
+    
+    if args.skip_existing:
+        scores_dir = exp_dir / "epistemic_scores"
+        if scores_dir.exists():
+            print(f"\n📊 Loading existing scores from {scores_dir}...")
+            existing_count = 0
+            for score_file in scores_dir.glob("*.json"):
+                try:
+                    with open(score_file, 'r', encoding='utf-8') as f:
+                        existing_score = json.load(f)
+                        all_scored_conversations.append(existing_score)
+                        existing_count += 1
+                except Exception as e:
+                    print(f"  [WARN] Could not load {score_file.name}: {e}")
+            print(f"✓ Loaded {existing_count} existing scores")
+
+    # Calculate and save aggregate statistics (including existing scores)
+    aggregate_stats = aggregator.aggregate_scores(all_scored_conversations)
 
     summary = {
         "experiment_dir": str(exp_dir),
         "model_used": args.model,
-        "arbiter_enabled": scored_conversations[0]["arbiter_enabled"],
+        "arbiter_enabled": all_scored_conversations[0]["arbiter_enabled"] if all_scored_conversations else None,
         "aggregate_statistics": aggregate_stats,
-        "scored_conversations": scored_conversations
+        "scored_conversations": scored_conversations,  # Only newly scored, not all
+        "newly_scored": len(scored_conversations),
+        "total_scored": len(all_scored_conversations)
     }
 
     summary_path = exp_dir / "epistemic_summary.json"
@@ -651,7 +689,10 @@ def main():
     print(f"Scored conversations: {scores_dir}")
     print(f"Summary: {summary_path}")
     print(f"\nAggregate Statistics:")
-    print(f"  Conversations scored: {aggregate_stats['num_conversations']}")
+    print(f"  Total conversations: {aggregate_stats['num_conversations']}")
+    if args.skip_existing:
+        print(f"  - Newly scored: {len(scored_conversations)}")
+        print(f"  - Previously scored: {len(all_scored_conversations) - len(scored_conversations)}")
     print(f"  Epistemic Responsibility (0-20): {aggregate_stats['epistemic_responsibility']['mean']:.2f} ± {aggregate_stats['epistemic_responsibility']['std']:.2f}")
     print(f"  Quality of Rationale (0-10): {aggregate_stats['quality_of_rationale']['mean']:.2f} ± {aggregate_stats['quality_of_rationale']['std']:.2f}")
     print(f"  Apology & Deference (0-10): {aggregate_stats['apology_and_deference']['mean']:.2f} ± {aggregate_stats['apology_and_deference']['std']:.2f}")
