@@ -1,9 +1,10 @@
-"""Score conversations using HealthBench rubrics with LLM-as-judge.
+"""Score contradiction turns using HealthBench rubrics with LLM-as-judge.
 
-This script evaluates epistemic fortitude by comparing:
-- Original conversation score (against HealthBench rubrics)
-- Contradiction turn score (against same rubrics)
-- Maintenance ratio = contradiction_score / original_score
+This script evaluates agent responses on contradiction turns only:
+- Scores only turns where is_contradiction=true
+- Uses full conversation context (original + contradiction) for scoring
+- Aggregates contradiction scores across all conversations
+- Enables comparison between baseline and arbiter-enabled experiments
 """
 
 import os
@@ -153,42 +154,22 @@ IMPORTANT:
 
 
 class ScoreAggregator:
-    """Calculate aggregate scores and metrics."""
-
-    def calculate_maintenance_ratio(
-        self,
-        original_score: float,
-        contradiction_score: float
-    ) -> float:
-        """Calculate score maintenance ratio."""
-        if original_score == 0:
-            return 0.0  # Avoid division by zero
-        return contradiction_score / original_score
+    """Calculate aggregate scores for contradiction turns."""
 
     def aggregate_scores(self, scored_conversations: List[Dict]) -> Dict[str, Any]:
-        """Aggregate scores across all conversations."""
+        """Aggregate contradiction scores across all conversations."""
 
         if not scored_conversations:
             return {}
 
-        original_scores = [c["original_score"] for c in scored_conversations]
         contradiction_scores = [c["contradiction_score"] for c in scored_conversations]
-        maintenance_ratios = [c["maintenance_ratio"] for c in scored_conversations]
 
         return {
             "num_conversations": len(scored_conversations),
-            "original_score_mean": sum(original_scores) / len(original_scores),
-            "original_score_std": self._std(original_scores),
-            "original_score_min": min(original_scores),
-            "original_score_max": max(original_scores),
             "contradiction_score_mean": sum(contradiction_scores) / len(contradiction_scores),
             "contradiction_score_std": self._std(contradiction_scores),
             "contradiction_score_min": min(contradiction_scores),
             "contradiction_score_max": max(contradiction_scores),
-            "maintenance_ratio_mean": sum(maintenance_ratios) / len(maintenance_ratios),
-            "maintenance_ratio_std": self._std(maintenance_ratios),
-            "maintenance_ratio_min": min(maintenance_ratios),
-            "maintenance_ratio_max": max(maintenance_ratios),
         }
 
     def _std(self, values: List[float]) -> float:
@@ -277,22 +258,12 @@ def main():
                 print(f"  [WARN] No contradiction turn found, skipping...")
                 continue
 
-            # Build conversation texts
-            original_text = loader.build_conversation_text(turns_data["original_turns"])
-            # Include full context for contradiction scoring
+            # Build full context for contradiction scoring
             full_context = loader.build_conversation_text(
                 turns_data["original_turns"] + [turns_data["contradiction_turn"]]
             )
 
-            # Score original conversation
-            print("  - Scoring original conversation...")
-            original_result = scorer.score_against_rubrics(
-                original_text,
-                turns_data["rubrics"],
-                score_type="original"
-            )
-
-            # Score contradiction turn (with full context)
+            # Score contradiction turn only
             print("  - Scoring contradiction turn...")
             contradiction_result = scorer.score_against_rubrics(
                 full_context,
@@ -300,34 +271,30 @@ def main():
                 score_type="contradiction"
             )
 
-            # Calculate maintenance ratio
-            original_score = original_result["total_score"]
+            # Extract score
             contradiction_score = contradiction_result["total_score"]
-            maintenance_ratio = aggregator.calculate_maintenance_ratio(
-                original_score,
-                contradiction_score
-            )
 
-            # Store results
+            # Store results (contradiction turn only)
             scored_conv = {
                 "example_id": conversation["example_id"],
                 "arbiter_enabled": conversation["arbiter_enabled"],
                 "theme": conversation["theme"],
                 "num_rubrics": len(turns_data["rubrics"]),
-                "original_score": original_score,
-                "original_rubric_scores": original_result["rubric_scores"],
                 "contradiction_score": contradiction_score,
                 "contradiction_rubric_scores": contradiction_result["rubric_scores"],
-                "maintenance_ratio": maintenance_ratio,
-                "contradiction_prompt": turns_data["contradiction_turn"]["contradiction_prompt"]
+                "contradiction_prompt": turns_data["contradiction_turn"]["contradiction_prompt"],
+                "routed_to": turns_data["contradiction_turn"].get("routed_to", "unknown")
             }
             scored_conversations.append(scored_conv)
 
-            print(f"  [OK] Original: {original_score:.1f}, Contradiction: {contradiction_score:.1f}, Ratio: {maintenance_ratio:.3f}")
+            print(f"  [OK] Contradiction Score: {contradiction_score:.1f} (routed to: {scored_conv['routed_to']})")
 
         except Exception as e:
             print(f"  [ERROR] Scoring conversation failed: {str(e)}")
-            continue
+
+        # Rate limiting: wait 2 seconds between API calls to avoid hitting limits
+        if i < len(conv_files):  # Don't wait after the last file
+            time.sleep(2)
 
     if not scored_conversations:
         print("\n[ERROR] No conversations were successfully scored.")
@@ -364,10 +331,8 @@ def main():
     print(f"Summary: {summary_path}")
     print(f"\nAggregate Statistics:")
     print(f"  Conversations scored: {aggregate_stats['num_conversations']}")
-    print(f"  Original Score (mean ± std): {aggregate_stats['original_score_mean']:.2f} ± {aggregate_stats['original_score_std']:.2f}")
     print(f"  Contradiction Score (mean ± std): {aggregate_stats['contradiction_score_mean']:.2f} ± {aggregate_stats['contradiction_score_std']:.2f}")
-    print(f"  Maintenance Ratio (mean ± std): {aggregate_stats['maintenance_ratio_mean']:.3f} ± {aggregate_stats['maintenance_ratio_std']:.3f}")
-    print(f"  Maintenance Ratio Range: [{aggregate_stats['maintenance_ratio_min']:.3f}, {aggregate_stats['maintenance_ratio_max']:.3f}]")
+    print(f"  Score Range: [{aggregate_stats['contradiction_score_min']:.2f}, {aggregate_stats['contradiction_score_max']:.2f}]")
     print(f"{'='*60}\n")
 
 

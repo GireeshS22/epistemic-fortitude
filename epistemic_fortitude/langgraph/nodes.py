@@ -75,8 +75,8 @@ def arbiter_agent_node(state: EpistemicState) -> dict:
     """
     print("➡️  Routing to arbiter for fact-checking")
 
-    # Initialize LLM (same model as ADK version)
-    model_name = os.getenv("DEFAULT_MODEL", "gemini-2.5-flash")
+    # Initialize LLM - use ARBITER_MODEL if specified, otherwise use DEFAULT_MODEL
+    model_name = os.getenv("ARBITER_MODEL", os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"))
     llm = ChatGoogleGenerativeAI(
         model=model_name,
         temperature=0.7

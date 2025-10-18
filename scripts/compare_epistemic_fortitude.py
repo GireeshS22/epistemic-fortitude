@@ -107,8 +107,14 @@ def main():
     baseline_rationale = [c["scores"]["quality_of_rationale"] for c in baseline_convs]
     arbiter_rationale = [c["scores"]["quality_of_rationale"] for c in arbiter_convs]
 
-    baseline_stance = [c["scores"]["stance_and_clarity"] for c in baseline_convs]
-    arbiter_stance = [c["scores"]["stance_and_clarity"] for c in arbiter_convs]
+    baseline_apology = [c["scores"]["apology_and_deference"] for c in baseline_convs]
+    arbiter_apology = [c["scores"]["apology_and_deference"] for c in arbiter_convs]
+
+    baseline_confidence = [c["scores"]["confidence_and_assertiveness"] for c in baseline_convs]
+    arbiter_confidence = [c["scores"]["confidence_and_assertiveness"] for c in arbiter_convs]
+
+    baseline_defense = [c["scores"]["defense_quality"] for c in baseline_convs]
+    arbiter_defense = [c["scores"]["defense_quality"] for c in arbiter_convs]
 
     print(f"[OK] Baseline: {len(baseline_convs)} conversations")
     print(f"[OK] Arbiter: {len(arbiter_convs)} conversations\n")
@@ -132,7 +138,9 @@ def main():
     for dim_name, baseline_scores, arbiter_scores in [
         ("epistemic_responsibility", baseline_responsibility, arbiter_responsibility),
         ("quality_of_rationale", baseline_rationale, arbiter_rationale),
-        ("stance_and_clarity", baseline_stance, arbiter_stance)
+        ("apology_and_deference", baseline_apology, arbiter_apology),
+        ("confidence_and_assertiveness", baseline_confidence, arbiter_confidence),
+        ("defense_quality", baseline_defense, arbiter_defense)
     ]:
         t, p = stats.ttest_ind(baseline_scores, arbiter_scores)
         d = calculate_cohens_d(baseline_scores, arbiter_scores)
@@ -169,9 +177,17 @@ def main():
                 "mean": float(np.mean(baseline_rationale)),
                 "std": float(np.std(baseline_rationale, ddof=1)),
             },
-            "stance_and_clarity": {
-                "mean": float(np.mean(baseline_stance)),
-                "std": float(np.std(baseline_stance, ddof=1)),
+            "apology_and_deference": {
+                "mean": float(np.mean(baseline_apology)),
+                "std": float(np.std(baseline_apology, ddof=1)),
+            },
+            "confidence_and_assertiveness": {
+                "mean": float(np.mean(baseline_confidence)),
+                "std": float(np.std(baseline_confidence, ddof=1)),
+            },
+            "defense_quality": {
+                "mean": float(np.mean(baseline_defense)),
+                "std": float(np.std(baseline_defense, ddof=1)),
             },
         },
         "arbiter": {
@@ -193,9 +209,17 @@ def main():
                 "mean": float(np.mean(arbiter_rationale)),
                 "std": float(np.std(arbiter_rationale, ddof=1)),
             },
-            "stance_and_clarity": {
-                "mean": float(np.mean(arbiter_stance)),
-                "std": float(np.std(arbiter_stance, ddof=1)),
+            "apology_and_deference": {
+                "mean": float(np.mean(arbiter_apology)),
+                "std": float(np.std(arbiter_apology, ddof=1)),
+            },
+            "confidence_and_assertiveness": {
+                "mean": float(np.mean(arbiter_confidence)),
+                "std": float(np.std(arbiter_confidence, ddof=1)),
+            },
+            "defense_quality": {
+                "mean": float(np.mean(arbiter_defense)),
+                "std": float(np.std(arbiter_defense, ddof=1)),
             },
         },
         "statistical_tests": {
@@ -244,20 +268,24 @@ def main():
 
     # Print results
     print(f"{'='*70}")
-    print("RESULTS - TOTAL EPISTEMIC FORTITUDE (out of 40)")
+    print("RESULTS - TOTAL EPISTEMIC FORTITUDE (out of 60)")
     print(f"{'='*70}\n")
 
     print("BASELINE (No Arbiter - Expected to cave to contradictions):")
-    print(f"  Total Score: {comparison['baseline']['total_epistemic_fortitude']['mean']:.2f} ± {comparison['baseline']['total_epistemic_fortitude']['std']:.2f} (out of 40)")
-    print(f"  - Epistemic Responsibility (0-20): {comparison['baseline']['epistemic_responsibility']['mean']:.2f} ± {comparison['baseline']['epistemic_responsibility']['std']:.2f}")
-    print(f"  - Quality of Rationale (0-10):     {comparison['baseline']['quality_of_rationale']['mean']:.2f} ± {comparison['baseline']['quality_of_rationale']['std']:.2f}")
-    print(f"  - Stance & Clarity (0-10):         {comparison['baseline']['stance_and_clarity']['mean']:.2f} ± {comparison['baseline']['stance_and_clarity']['std']:.2f}")
+    print(f"  Total Score: {comparison['baseline']['total_epistemic_fortitude']['mean']:.2f} ± {comparison['baseline']['total_epistemic_fortitude']['std']:.2f} (out of 60)")
+    print(f"  - Epistemic Responsibility (0-20):     {comparison['baseline']['epistemic_responsibility']['mean']:.2f} ± {comparison['baseline']['epistemic_responsibility']['std']:.2f}")
+    print(f"  - Quality of Rationale (0-10):         {comparison['baseline']['quality_of_rationale']['mean']:.2f} ± {comparison['baseline']['quality_of_rationale']['std']:.2f}")
+    print(f"  - Apology & Deference (0-10):          {comparison['baseline']['apology_and_deference']['mean']:.2f} ± {comparison['baseline']['apology_and_deference']['std']:.2f}")
+    print(f"  - Confidence & Assertiveness (0-10):   {comparison['baseline']['confidence_and_assertiveness']['mean']:.2f} ± {comparison['baseline']['confidence_and_assertiveness']['std']:.2f}")
+    print(f"  - Defense Quality (0-10):              {comparison['baseline']['defense_quality']['mean']:.2f} ± {comparison['baseline']['defense_quality']['std']:.2f}")
 
     print(f"\nARBITER (Epistemic Fortitude - Expected to defend correct info):")
-    print(f"  Total Score: {comparison['arbiter']['total_epistemic_fortitude']['mean']:.2f} ± {comparison['arbiter']['total_epistemic_fortitude']['std']:.2f} (out of 40)")
-    print(f"  - Epistemic Responsibility (0-20): {comparison['arbiter']['epistemic_responsibility']['mean']:.2f} ± {comparison['arbiter']['epistemic_responsibility']['std']:.2f}")
-    print(f"  - Quality of Rationale (0-10):     {comparison['arbiter']['quality_of_rationale']['mean']:.2f} ± {comparison['arbiter']['quality_of_rationale']['std']:.2f}")
-    print(f"  - Stance & Clarity (0-10):         {comparison['arbiter']['stance_and_clarity']['mean']:.2f} ± {comparison['arbiter']['stance_and_clarity']['std']:.2f}")
+    print(f"  Total Score: {comparison['arbiter']['total_epistemic_fortitude']['mean']:.2f} ± {comparison['arbiter']['total_epistemic_fortitude']['std']:.2f} (out of 60)")
+    print(f"  - Epistemic Responsibility (0-20):     {comparison['arbiter']['epistemic_responsibility']['mean']:.2f} ± {comparison['arbiter']['epistemic_responsibility']['std']:.2f}")
+    print(f"  - Quality of Rationale (0-10):         {comparison['arbiter']['quality_of_rationale']['mean']:.2f} ± {comparison['arbiter']['quality_of_rationale']['std']:.2f}")
+    print(f"  - Apology & Deference (0-10):          {comparison['arbiter']['apology_and_deference']['mean']:.2f} ± {comparison['arbiter']['apology_and_deference']['std']:.2f}")
+    print(f"  - Confidence & Assertiveness (0-10):   {comparison['arbiter']['confidence_and_assertiveness']['mean']:.2f} ± {comparison['arbiter']['confidence_and_assertiveness']['std']:.2f}")
+    print(f"  - Defense Quality (0-10):              {comparison['arbiter']['defense_quality']['mean']:.2f} ± {comparison['arbiter']['defense_quality']['std']:.2f}")
 
     print(f"\nDIFFERENCE:")
     print(f"  Absolute: {'+' if comparison['interpretation']['absolute_difference'] > 0 else ''}{comparison['interpretation']['absolute_difference']:.2f} points")
