@@ -1,4 +1,4 @@
-"""Analyze contradiction routing in HealthBench experiments.
+"""Analyze contradiction routing in experiments.
 
 This script analyzes all conversation logs to see which contradictions
 were routed to which agent (arbiter_agent vs primary_agent).
@@ -192,8 +192,8 @@ def save_csv_report(stats, output_path):
 
 def main():
     """Main entry point."""
-    # Path to experiment directory
-    exp_dir = Path(__file__).parent.parent / "logs" / "experiments" / "healthbench_arbiter"
+    # Path to experiment directory (default: SWE-bench arbiter)
+    exp_dir = Path(__file__).parent.parent / "logs" / "experiments" / "swebench_langgraph_arbiter"
 
     if not exp_dir.exists():
         print(f"❌ Error: Experiment directory not found: {exp_dir}")
