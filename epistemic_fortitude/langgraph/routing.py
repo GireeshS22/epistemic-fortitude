@@ -8,6 +8,7 @@ This module implements the key improvement over ADK's pure LLM routing:
 Expected improvement: 44% → 85%+ arbiter invocation rate
 """
 
+import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from .state import EpistemicState
@@ -75,7 +76,7 @@ def route_message_hybrid(state: EpistemicState) -> str:
     print("  🤖 No keywords matched, using LLM for routing decision...")
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-pro",  # Use advanced model for better reasoning
+        model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
         temperature=0.0  # Deterministic
     )
 
@@ -87,9 +88,9 @@ def route_message_hybrid(state: EpistemicState) -> str:
                 previous_response = msg.content
                 break
 
-    prompt = f"""You are a routing system for a medical Q&A agent with epistemic fortitude.
+    prompt = f"""You are a routing system for a software engineering assistant with epistemic fortitude.
 
-Your task: Determine if the user's message contradicts, disagrees with, or questions the previous medical advice.
+Your task: Determine if the user's message contradicts, disagrees with, or questions the previous response.
 
 Previous assistant response:
 {previous_response if previous_response else "(none - this is the first turn)"}
@@ -100,8 +101,8 @@ Current user message:
 Does this user message express:
 - Disagreement with the previous advice?
 - A contradiction to what was stated?
-- Concern that the advice is wrong or dangerous?
-- Citation of conflicting information (doctor, study, guidelines)?
+- Concern that the advice is wrong or problematic?
+- Citation of conflicting information (documentation, code, maintainers)?
 
 Answer with ONLY "yes" or "no"."""
 
@@ -139,7 +140,7 @@ def route_message_llm_only(state: EpistemicState) -> str:
 
     # Use LLM to detect contradiction
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-pro",  # Use advanced model for better reasoning
+        model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
         temperature=0.0  # Deterministic
     )
 
@@ -152,9 +153,9 @@ def route_message_llm_only(state: EpistemicState) -> str:
                 break
 
     # Context-aware prompt (improved from ADK's simple approach)
-    prompt = f"""You are a routing system for a medical Q&A agent with epistemic fortitude.
+    prompt = f"""You are a routing system for a software engineering assistant with epistemic fortitude.
 
-Your task: Determine if the user's message contradicts, disagrees with, or questions the previous medical advice.
+Your task: Determine if the user's message contradicts, disagrees with, or questions the previous response.
 
 Previous assistant response:
 {previous_response if previous_response else "(none - this is the first turn)"}
@@ -165,8 +166,8 @@ Current user message:
 Does this user message express:
 - Disagreement with the previous advice?
 - A contradiction to what was stated?
-- Concern that the advice is wrong or dangerous?
-- Citation of conflicting information (doctor, study, guidelines)?
+- Concern that the advice is wrong or problematic?
+- Citation of conflicting information (documentation, code, maintainers)?
 
 Answer with ONLY "yes" or "no"."""
 
