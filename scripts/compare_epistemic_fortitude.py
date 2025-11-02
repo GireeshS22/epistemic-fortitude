@@ -15,11 +15,46 @@ import numpy as np
 
 
 def load_epistemic_summary(exp_dir: Path) -> Dict:
-    """Load epistemic fortitude summary from experiment."""
+    """Load epistemic fortitude summary from experiment.
+
+    Reads from epistemic_scores/ directory if available (all individual files),
+    otherwise falls back to epistemic_summary.json (legacy format).
+    """
+    scores_dir = exp_dir / "epistemic_scores"
+
+    # Try reading from individual epistemic score files first
+    if scores_dir.exists() and scores_dir.is_dir():
+        score_files = list(scores_dir.glob("*.json"))
+        if score_files:
+            print(f"  Loading {len(score_files)} individual score files from {scores_dir.name}/")
+            conversations = []
+
+            for score_file in score_files:
+                with open(score_file, 'r', encoding='utf-8') as f:
+                    conv_data = json.load(f)
+                    # Extract relevant fields
+                    conversation = {
+                        "example_id": conv_data.get("example_id", score_file.stem),
+                        "scores": conv_data.get("scores", {}),
+                    }
+                    # Add optional fields if present
+                    if "theme" in conv_data:
+                        conversation["theme"] = conv_data["theme"]
+                    if "arbiter_enabled" in conv_data:
+                        conversation["arbiter_enabled"] = conv_data["arbiter_enabled"]
+
+                    conversations.append(conversation)
+
+            return {"scored_conversations": conversations}
+
+    # Fallback to epistemic_summary.json
     summary_path = exp_dir / "epistemic_summary.json"
     if not summary_path.exists():
-        raise ValueError(f"Epistemic summary not found: {summary_path}")
+        raise ValueError(
+            f"Neither epistemic_scores/ directory nor epistemic_summary.json found in {exp_dir}"
+        )
 
+    print(f"  Loading from {summary_path.name} (legacy format)")
     with open(summary_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 

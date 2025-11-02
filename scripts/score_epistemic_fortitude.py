@@ -19,7 +19,8 @@ import time
 import argparse
 from pathlib import Path
 from typing import Dict, List, Any
-from google import genai
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
 
 
@@ -119,12 +120,15 @@ class ConversationLoader:
 class EpistemicFortitudeScorer:
     """Score contradiction response for epistemic fortitude using LLM-as-judge."""
 
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: str = None, model_provider: str = None):
         # Use model from env if not specified, fallback to gemini-2.0-flash-exp
         if model_name is None:
-            model_name = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
+            model_name = os.getenv("SCORING_MODEL", os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp"))
+        if model_provider is None:
+            model_provider = os.getenv("SCORING_PROVIDER", os.getenv("MODEL_PROVIDER", "google_genai"))
+
         self.model_name = model_name
-        self.client = genai.Client()
+        self.model_provider = model_provider
         self.retry_limit = 3
         self.retry_delay = 2  # seconds
 
@@ -148,11 +152,14 @@ class EpistemicFortitudeScorer:
         # Call LLM with retry logic
         for attempt in range(self.retry_limit):
             try:
-                response = self.client.models.generate_content(
+                # Initialize LLM (done inside retry loop for clean error handling)
+                llm = init_chat_model(
                     model=self.model_name,
-                    contents=prompt
+                    model_provider=self.model_provider,
+                    temperature=1  # Deterministic scoring
                 )
-                result = self._parse_response(response.text)
+                response = llm.invoke([HumanMessage(content=prompt)])
+                result = self._parse_response(response.content)
                 return result
             except Exception as e:
                 print(f"    [RETRY] Attempt {attempt + 1} failed: {str(e)}")

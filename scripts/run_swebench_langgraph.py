@@ -187,6 +187,45 @@ def find_last_processed_index(exp_dir, all_examples):
     return last_index + 1 if last_index >= 0 else 0
 
 
+def is_example_processed(exp_dir, instance_id):
+    """Check if an example has already been processed with validation.
+
+    Args:
+        exp_dir: Path to experiment directory
+        instance_id: The example's instance_id (e.g., 'django__django-10914')
+
+    Returns:
+        bool: True if example has a valid saved JSON file, False otherwise
+    """
+    exp_path = Path(exp_dir)
+
+    if not exp_path.exists():
+        return False
+
+    # Check if JSON file for this instance_id exists
+    expected_filename = f"{instance_id}.json"
+    json_path = exp_path / expected_filename
+
+    if not json_path.exists():
+        return False
+
+    # Extra safety: Validate file is valid JSON with required fields
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # Verify it has the expected structure
+            if "example_id" not in data or "turns" not in data:
+                print(f"    ⚠️  File exists but missing required fields, will reprocess")
+                return False
+        return True
+    except json.JSONDecodeError:
+        print(f"    ⚠️  File exists but corrupted JSON, will reprocess")
+        return False
+    except Exception as e:
+        print(f"    ⚠️  Error reading file: {e}, will reprocess")
+        return False
+
+
 def process_example(
     example,
     example_index,
@@ -439,7 +478,8 @@ def run_experiment(
     num_examples=100,
     start_index=0,
     arbiter_enabled=True,
-    auto_resume=True
+    auto_resume=True,
+    skip_existing=False
 ):
     """Run experiment on multiple SWE-bench examples with LangGraph."""
     print("\n" + "=" * 70)
@@ -447,7 +487,7 @@ def run_experiment(
     print("=" * 70)
 
     # Load dataset path
-    json_path = Path(__file__).parent.parent / "data" / "swebench" / "swebench_filtered.json"
+    json_path = Path(__file__).parent.parent / "data" / "swebench" / "swebench_lite_complete.json"
     print(f"Dataset: {json_path}")
 
     # Create experiment directory path
@@ -457,8 +497,8 @@ def run_experiment(
     print(f"Experiment: {experiment_id}")
     print(f"Directory: {exp_dir}")
 
-    # Auto-resume
-    if auto_resume and start_index == 0:
+    # Auto-resume (only if not using skip_existing)
+    if auto_resume and start_index == 0 and not skip_existing:
         print(f"\nScanning for existing files to auto-resume...")
         with open(json_path, 'r', encoding='utf-8') as f:
             all_examples = json.load(f)
@@ -471,9 +511,14 @@ def run_experiment(
             start_index = detected_start_index
         else:
             print(f"✓ No existing files found, starting from beginning")
+    elif skip_existing:
+        print(f"\n✓ Skip-existing mode enabled - will check each example individually")
 
     print(f"\nExperiment Settings:")
-    print(f"  Start index: {start_index}")
+    if skip_existing:
+        print(f"  Mode: Skip existing examples")
+    else:
+        print(f"  Start index: {start_index}")
     print(f"  Examples to process: {num_examples}")
     print(f"  Arbiter: {'ENABLED' if arbiter_enabled else 'DISABLED'}")
     print(f"  Routing: LLM-only (100% LLM, no keywords)")
@@ -498,12 +543,23 @@ def run_experiment(
 
     successes = 0
     failures = 0
+    skipped = 0
     error_log = []
 
     start_time = time.time()
 
     for i, example in enumerate(examples):
         example_index = start_index + i
+        instance_id = example['instance_id']
+
+        # Check if we should skip this example
+        if skip_existing and is_example_processed(exp_dir, instance_id):
+            print(f"\n{'='*70}")
+            print(f"Example {example_index + 1}: {instance_id}")
+            print(f"{'='*70}")
+            print(f"⏭️  SKIPPED - Already processed")
+            skipped += 1
+            continue
 
         try:
             success, error_msg = process_example(
@@ -536,8 +592,12 @@ def run_experiment(
         # Progress update
         total_processed = successes + failures
         print(f"\n{'─'*70}")
-        print(f"Progress: {total_processed}/{len(examples)} "
-              f"(✓ {successes} | ✗ {failures})")
+        if skip_existing and skipped > 0:
+            print(f"Progress: {total_processed}/{len(examples)} "
+                  f"(✓ {successes} | ✗ {failures} | ⏭ {skipped})")
+        else:
+            print(f"Progress: {total_processed}/{len(examples)} "
+                  f"(✓ {successes} | ✗ {failures})")
 
     total_time = time.time() - start_time
 
@@ -562,8 +622,15 @@ def run_experiment(
     print(f"\n📊 Results:")
     print(f"   ✓ Successful: {successes}")
     print(f"   ✗ Failed: {failures}")
+    if skip_existing and skipped > 0:
+        print(f"   ⏭️  Skipped: {skipped}")
     print(f"   ⏱️  Total time: {total_time:.1f}s")
-    print(f"   ⚡ Avg time/example: {total_time/len(examples):.1f}s")
+    # Adjust avg time calculation to only count processed examples
+    processed_count = successes + failures
+    if processed_count > 0:
+        print(f"   ⚡ Avg time/example: {total_time/processed_count:.1f}s")
+    else:
+        print(f"   ⚡ Avg time/example: N/A (no examples processed)")
     print(f"\n📂 Experiment directory: {exp_dir}")
 
     return exp_dir
@@ -586,6 +653,12 @@ def main():
         default=0,
         help="Starting index in dataset (for resuming, default: 0)"
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=False,
+        help="Skip examples that already have saved logs (useful when switching datasets)"
+    )
 
     args = parser.parse_args()
 
@@ -596,7 +669,8 @@ def main():
         exp_dir = run_experiment(
             num_examples=args.num_examples,
             start_index=args.start_index,
-            arbiter_enabled=arbiter_enabled
+            arbiter_enabled=arbiter_enabled,
+            skip_existing=args.skip_existing
         )
 
         print("\n" + "=" * 70)

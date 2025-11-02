@@ -9,7 +9,7 @@ Expected improvement: 44% → 85%+ arbiter invocation rate
 """
 
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from .state import EpistemicState
 
@@ -75,9 +75,10 @@ def route_message_hybrid(state: EpistemicState) -> str:
     # Only invoked if no keywords matched (saves cost and latency)
     print("  🤖 No keywords matched, using LLM for routing decision...")
 
-    llm = ChatGoogleGenerativeAI(
-        model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
-        temperature=0.0  # Deterministic
+    llm = init_chat_model(
+        model=os.getenv("COORDINATOR_MODEL", os.getenv("DEFAULT_MODEL", "gemini-2.5-flash")),
+        model_provider=os.getenv("MODEL_PROVIDER", "google_genai"),
+        temperature=float(os.getenv("COORDINATOR_TEMPERATURE", "0.0"))
     )
 
     # Previous assistant message for context (if it exists)
@@ -139,9 +140,10 @@ def route_message_llm_only(state: EpistemicState) -> str:
     print("  🤖 Using LLM-only routing (no keyword detection)...")
 
     # Use LLM to detect contradiction
-    llm = ChatGoogleGenerativeAI(
-        model=os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"),
-        temperature=0.0  # Deterministic
+    llm = init_chat_model(
+        model=os.getenv("COORDINATOR_MODEL", os.getenv("DEFAULT_MODEL", "gemini-2.5-flash")),
+        model_provider=os.getenv("MODEL_PROVIDER", "google_genai"),
+        temperature=float(os.getenv("COORDINATOR_TEMPERATURE", "0.0"))
     )
 
     # Get previous assistant message for context (if it exists)

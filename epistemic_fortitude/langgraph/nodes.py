@@ -6,7 +6,7 @@ Each node is a function that takes state and returns updated state.
 
 import os
 import time
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, AIMessage
 from .state import EpistemicState
 from ..prompts import PRIMARY_AGENT_INSTRUCTIONS, INTERVENTIONAL_AGENT_INSTRUCTIONS
@@ -27,9 +27,13 @@ def primary_agent_node(state: EpistemicState) -> dict:
 
     # Initialize LLM (same model as ADK version)
     model_name = os.getenv("DEFAULT_MODEL", "gemini-2.5-flash")
-    llm = ChatGoogleGenerativeAI(
+    model_provider = os.getenv("MODEL_PROVIDER", "google_genai")
+    temperature = float(os.getenv("PRIMARY_AGENT_TEMPERATURE", "0.7"))
+
+    llm = init_chat_model(
         model=model_name,
-        temperature=0.7
+        model_provider=model_provider,
+        temperature=temperature
     )
 
     # Build messages with system instruction
@@ -77,9 +81,14 @@ def arbiter_agent_node(state: EpistemicState) -> dict:
 
     # Initialize LLM - use ARBITER_MODEL if specified, otherwise use DEFAULT_MODEL
     model_name = os.getenv("ARBITER_MODEL", os.getenv("DEFAULT_MODEL", "gemini-2.5-flash"))
-    llm = ChatGoogleGenerativeAI(
+    # Allow arbiter to use different provider if specified
+    model_provider = os.getenv("ARBITER_PROVIDER", os.getenv("MODEL_PROVIDER", "google_genai"))
+    temperature = float(os.getenv("INTERVENTIONAL_AGENT_TEMPERATURE", "0.3"))
+
+    llm = init_chat_model(
         model=model_name,
-        temperature=0.7
+        model_provider=model_provider,
+        temperature=temperature
     )
 
     # Build messages with system instruction
