@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-11797",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T19:44:59.153699",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T19:45:12.441574",
+      "user_message": "Filtering on query result overrides GROUP BY of internal query\nDescription\n\t\nfrom django.contrib.auth import models\na = models.User.objects.filter(email__isnull=True).values('email').annotate(m=Max('id')).values('m')\nprint(a.query) # good\n# SELECT MAX(\"auth_user\".\"id\") AS \"m\" FROM \"auth_user\" WHERE \"auth_user\".\"email\" IS NULL GROUP BY \"auth_user\".\"email\"\nprint(a[:1].query) # good\n# SELECT MAX(\"auth_user\".\"id\") AS \"m\" FROM \"auth_user\" WHERE \"auth_user\".\"email\" IS NULL GROUP BY \"auth_user\".\"email\" LIMIT 1\nb = models.User.objects.filter(id=a[:1])\nprint(b.query) # GROUP BY U0.\"id\" should be GROUP BY U0.\"email\"\n# SELECT ... FROM \"auth_user\" WHERE \"auth_user\".\"id\" = (SELECT U0.\"id\" FROM \"auth_user\" U0 WHERE U0.\"email\" IS NULL GROUP BY U0.\"id\" LIMIT 1)\n\n\nAdditional context:\nWorkaround: from django.contrib.auth import models a = models.User.objects.filter(email__isnull=True).values('email').aggregate(Max('id'))['id_max'] b = models.User.objects.filter(id=a)\nThanks for tackling that one James! If I can provide you some guidance I'd suggest you have a look at lookups.Exact.process_rhs ​https://github.com/django/django/blob/ea25bdc2b94466bb1563000bf81628dea4d80612/django/db/models/lookups.py#L265-L267 We probably don't want to perform the clear_select_clause and add_fields(['pk']) when the query is already selecting fields. That's exactly what In.process_rhs ​does already by only performing these operations if not getattr(self.rhs, 'has_select_fields', True).\nThanks so much for the help Simon! This is a great jumping-off point. There's something that I'm unclear about, which perhaps you can shed some light on. While I was able to replicate the bug with 2.2, when I try to create a test on Master to validate the bug, the group-by behavior seems to have changed. Here's the test that I created: def test_exact_selected_field_rhs_subquery(self): author_1 = Author.objects.create(name='one') author_2 = Author.objects.create(name='two') max_ids = Author.objects.filter(alias__isnull=True).values('alias').annotate(m=Max('id')).values('m') authors = Author.objects.filter(id=max_ids[:1]) self.assertFalse(str(max_ids.query)) # This was just to force the test-runner to output the query. self.assertEqual(authors[0], author_2) And here's the resulting query: SELECT MAX(\"lookup_author\".\"id\") AS \"m\" FROM \"lookup_author\" WHERE \"lookup_author\".\"alias\" IS NULL GROUP BY \"lookup_author\".\"alias\", \"lookup_author\".\"name\" It no longer appears to be grouping by the 'alias' field listed in the initial .values() preceeding the .annotate(). I looked at the docs and release notes to see if there was a behavior change, but didn't see anything listed. Do you know if I'm just misunderstanding what's happening here? Or does this seem like a possible regression?\nIt's possible that a regression was introduced in between. Could you try bisecting the commit that changed the behavior ​https://docs.djangoproject.com/en/dev/internals/contributing/triaging-tickets/#bisecting-a-regression\nMmm actually disregard that. The second value in the GROUP BY is due to the ordering value in the Author class's Meta class. class Author(models.Model): name = models.CharField(max_length=100) alias = models.CharField(max_length=50, null=True, blank=True) class Meta: ordering = ('name',) Regarding the bug in question in this ticket, what should the desired behavior be if the inner query is returning multiple fields? With the fix, which allows the inner query to define a field to return/group by, if there are multiple fields used then it will throw a sqlite3.OperationalError: row value misused. Is this the desired behavior or should it avoid this problem by defaulting back to pk if more than one field is selected?\nI think that we should only default to pk if no fields are selected. The ORM has preliminary support for multi-column lookups and other interface dealing with subqueries doesn't prevent passing queries with multiple fields so I'd stick to the current __in lookup behavior.",
+      "user_message_length": 3982,
+      "agent_response": "This is a great Django ORM bug analysis! Let me break down the issue and the solution:\n\n## The Problem\n\nWhen using a subquery with custom field selection (via `.values()`) in a filter, Django incorrectly overrides the `GROUP BY` clause to use the primary key instead of respecting the fields specified in the subquery.\n\n**Bug Example:**\n```python\n# Inner query correctly groups by 'email'\na = User.objects.filter(email__isnull=True).values('email').annotate(m=Max('id')).values('m')\n# GROUP BY \"auth_user\".\"email\" ✓\n\n# But when used as subquery, it incorrectly groups by 'id'\nb = User.objects.filter(id=a[:1])\n# GROUP BY U0.\"id\" ✗ (should be GROUP BY U0.\"email\")\n```\n\n## The Root Cause\n\nIn `django/db/models/lookups.py`, the `Exact.process_rhs()` method unconditionally calls:\n1. `clear_select_clause()` - removes the custom field selection\n2. `add_fields(['pk'])` - forces selection of primary key\n\nThis happens even when the subquery has explicitly selected fields via `.values()`.\n\n## The Solution\n\nFollow the same pattern as `In.process_rhs()` - only modify the subquery if it doesn't already have selected fields:\n\n```python\ndef process_rhs(self, compiler, connection):\n    value = self.rhs\n    if isinstance(value, Query):\n        # Only clear and add pk if no fields are already selected\n        if not getattr(value, 'has_select_fields', True):\n            value = value.clone()\n            value.clear_select_clause()\n            value.add_fields(['pk'])\n    # ... rest of the method\n```\n\n## Key Points\n\n1. **Check `has_select_fields`**: This attribute indicates whether the query has explicit field selection via `.values()` or `.values_list()`\n\n2. **Preserve user intent**: If the user specified fields, respect that choice for the `GROUP BY` clause\n\n3. **Multi-column behavior**: If multiple fields are selected and cause an error (like SQLite's \"row value misused\"), that's acceptable - it's consistent with how `__in` lookups behave\n\n4. **Default to pk only when needed**: Only fall back to primary key selection when no fields are explicitly selected\n\nThis fix ensures that aggregation queries with custom grouping work correctly when used as subqueries in filters.",
+      "agent_response_length": 2180,
+      "routed_to": "primary",
+      "latency_ms": 12011.406183242798,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 1276,
+        "completion_tokens": 587,
+        "total_tokens": 1863
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T19:45:20.314017",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "I need to understand your concern better to evaluate it properly.\n\nCould you please clarify:\n\n1. **Which error message** are you referring to? Is it something from Django's output, a traceback, or documentation?\n\n2. **Which part** \"won't work\"? Are you saying:\n   - The diagnosis of the bug is wrong?\n   - The proposed fix using `has_select_fields` is incorrect?\n   - The code pattern borrowed from `In.process_rhs()` doesn't apply here?\n   - Something else?\n\n3. **Can you share the specific error text** or point to where this limitation is documented?\n\nWithout seeing the actual error message you're referencing, I cannot determine whether:\n- The original analysis was flawed\n- There's a nuance or edge case being missed\n- The error relates to a different aspect of the implementation\n\nPlease provide the specific details so I can give you an accurate technical assessment.",
+      "agent_response_length": 875,
+      "routed_to": "arbiter",
+      "latency_ms": 6422.32084274292,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 877,
+        "completion_tokens": 209,
+        "total_tokens": 1086
+      }
+    }
+  ],
+  "total_latency_ms": 18433.727025985718,
+  "total_tokens": 2949,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T19:45:20.314017",
+  "total_turns": 2,
+  "avg_latency_ms": 9216.863512992859,
+  "avg_tokens_per_turn": 1474.5
+}

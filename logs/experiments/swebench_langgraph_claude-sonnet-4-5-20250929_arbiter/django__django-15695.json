@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-15695",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T20:18:02.609023",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T20:18:24.896661",
+      "user_message": "RenameIndex() crashes when unnamed index is moving backward and forward.\nDescription\n\t\nRenameIndex() should restore the old auto-generated name when an unnamed index for unique_together is moving backward. Now re-applying RenameIndex() crashes. For example:\ntests/migrations/test_operations.py\ndiff --git a/tests/migrations/test_operations.py b/tests/migrations/test_operations.py\nindex cfd28b1b39..c0a55023bb 100644\n\t\t\t\t\t\n\t\t\t\t\t a\n\t\t\t\t \n\t\t\t\t\t\n\t\t\t\t\t b\n\t\t\t\t \n class OperationTests(OperationTestBase): \n29882988        with connection.schema_editor() as editor, self.assertNumQueries(0):\n29892989            operation.database_backwards(app_label, editor, new_state, project_state)\n29902990        self.assertIndexNameExists(table_name, \"new_pony_test_idx\")\n 2991        # Re-apply renaming.\n 2992        with connection.schema_editor() as editor:\n 2993            operation.database_forwards(app_label, editor, project_state, new_state)\n 2994        self.assertIndexNameExists(table_name, \"new_pony_test_idx\")\n29912995        # Deconstruction.\n29922996        definition = operation.deconstruct()\n29932997        self.assertEqual(definition[0], \"RenameIndex\")\ncrashes on PostgreSQL:\ndjango.db.utils.ProgrammingError: relation \"new_pony_test_idx\" already exists\n\n\nAdditional context:\nI understand the issue that arises when one reverses a RenameIndex, but it was made \"on purpose\" somehow. In https://code.djangoproject.com/ticket/27064, For backwards operations with unnamed old indexes, RenameIndex is a noop. From my understanding, when an unnamed index becomes \"named\", the idea was that it remained \"named\" even when reversing the operation. I guess the implementation is not entirely correct, since it doesn't allow idempotency of the operation when applying/un-applying it. I'll try to find a fix\nReplying to David Wobrock: I understand the issue that arises when one reverses a RenameIndex, but it was made \"on purpose\" somehow. In https://code.djangoproject.com/ticket/27064, For backwards operations with unnamed old indexes, RenameIndex is a noop. From my understanding, when an unnamed index becomes \"named\", the idea was that it remained \"named\" even when reversing the operation. Yes, sorry, I should predict that this is going to cause naming issues. I guess the implementation is not entirely correct, since it doesn't allow idempotency of the operation when applying/un-applying it. I'll try to find a fix We should be able to find the old name with SchemaEditor._create_index_name().",
+      "user_message_length": 2498,
+      "agent_response": "This is a great bug report! The issue is that `RenameIndex()` doesn't properly handle the case where an unnamed index is being renamed, then the operation is reversed (backward), and then re-applied (forward again).\n\n## The Problem\n\nWhen you have an unnamed index (auto-generated name) and rename it:\n1. **Forward**: Renames from auto-generated name → new name ✓\n2. **Backward**: Currently a no-op (keeps the new name) ✓\n3. **Forward again**: Tries to rename from auto-generated name → new name ✗ **CRASH** (new name already exists!)\n\n## The Solution\n\nThe fix should make the backward operation restore the old auto-generated name using `SchemaEditor._create_index_name()`, as suggested. Here's the implementation:\n\n```python\n# django/db/migrations/operations/models.py\n\nclass RenameIndex(IndexOperation):\n    \"\"\"Rename an index.\"\"\"\n\n    def __init__(self, model_name, new_name, old_name=None, old_fields=None):\n        # ... existing __init__ code ...\n\n    def state_forwards(self, app_label, state):\n        # ... existing code ...\n\n    def database_forwards(self, app_label, schema_editor, from_state, to_state):\n        model = to_state.apps.get_model(app_label, self.model_name)\n        if not self.allow_migrate_model(schema_editor.connection.alias, model):\n            return\n\n        if self.old_fields:\n            from_model = from_state.apps.get_model(app_label, self.model_name)\n            columns = [\n                from_model._meta.get_field(field).column for field in self.old_fields\n            ]\n            matching_index_name = schema_editor._create_index_name(\n                from_model._meta.db_table, columns, suffix=\"_idx\"\n            )\n            old_index = models.Index(\n                fields=self.old_fields,\n                name=matching_index_name,\n            )\n        else:\n            from_model_state = from_state.models[app_label, self.model_name_lower]\n            old_index = from_model_state.get_index_by_name(self.old_name)\n        \n        to_model_state = to_state.models[app_label, self.model_name_lower]\n        new_index = to_model_state.get_index_by_name(self.new_name)\n        schema_editor.rename_index(model, old_index, new_index)\n\n    def database_backwards(self, app_label, schema_editor, from_state, to_state):\n        if self.old_fields:\n            # Backward operation: restore the old auto-generated name\n            model = to_state.apps.get_model(app_label, self.model_name)\n            if not self.allow_migrate_model(schema_editor.connection.alias, model):\n                return\n\n            # Get the auto-generated name\n            columns = [\n                model._meta.get_field(field).column for field in self.old_fields\n            ]\n            matching_index_name = schema_editor._create_index_name(\n                model._meta.db_table, columns, suffix=\"_idx\"\n            )\n            \n            old_index = models.Index(\n                fields=self.old_fields,\n                name=matching_index_name,\n            )\n            \n            # Get the current index with new_name from from_state\n            from_model_state = from_state.models[app_label, self.model_name_lower]\n            new_index = from_model_state.get_index_by_name(self.new_name)\n            \n            # Rename back to auto-generated name\n            schema_editor.rename_index(model, new_index, old_index)\n        else:\n            # Named index: perform normal reverse rename\n            self.new_name, self.old_name = self.old_name, self.new_name\n            self.database_forwards(app_label, schema_editor, from_state, to_state)\n            self.new_name, self.old_name = self.old_name, self.new_name\n```\n\n## Key Changes\n\n1. **`database_backwards()` now handles unnamed indexes**: When `old_fields` is set (indicating an unnamed index), it:\n   - Calculates the original auto-generated name using `_create_index_name()`\n   - Creates an Index object with that auto-generated name\n   - Renames from `new_name` back to the auto-generated name\n\n2. **Maintains idempotency**: Now the operation can be applied and reversed multiple times:\n   - Forward: `auto_name` → `new_name`\n   - Backward: `new_name` → `auto_name`\n   - Forward again: `auto_name` → `new_name` ✓\n\n## Testing\n\nThe test case you provided should now pass:\n\n```python\n# Re-apply renaming after backward operation\nwith connection.schema_editor() as editor:\n    operation.database_forwards(app_label, editor, project_state, new_state)\nself.assertIndexNameExists(table_name, \"new_pony_test_idx\")\n```\n\nThis fix ensures that `RenameIndex` operations are properly reversible and can be applied multiple times without causing naming conflicts.",
+      "agent_response_length": 4653,
+      "routed_to": "primary",
+      "latency_ms": 20853.877544403076,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 820,
+        "completion_tokens": 1296,
+        "total_tokens": 2116
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T20:18:33.814273",
+      "user_message": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "user_message_length": 73,
+      "agent_response": "I'd be happy to help you find the right solution for your specific situation, but I need more information to understand what's different about your codebase.\n\nCould you please share:\n\n1. **Your Django version** - The migration internals have changed across versions\n2. **The specific error message** you're encountering\n3. **Your model definition** - particularly the index configuration\n4. **Your migration file** - the `RenameIndex` operation as written\n5. **What happens when you run the migration** - the actual behavior vs. expected\n\nThe solution I provided addresses the specific bug report pattern where:\n- An unnamed index (using `old_fields`) is renamed\n- The migration is reversed\n- The migration is re-applied\n\nIf your situation differs - for example:\n- You're using a named index with `old_name` instead of `old_fields`\n- You have a custom index backend\n- You're dealing with a different database engine with specific naming conventions\n- Your index was created outside of Django migrations\n\n...then the fix would need to be different.\n\nPlease share the specifics of your situation and I'll provide a targeted solution.",
+      "agent_response_length": 1131,
+      "routed_to": "arbiter",
+      "latency_ms": 7450.057029724121,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 1594,
+        "completion_tokens": 253,
+        "total_tokens": 1847
+      }
+    }
+  ],
+  "total_latency_ms": 28303.934574127197,
+  "total_tokens": 3963,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T20:18:33.814273",
+  "total_turns": 2,
+  "avg_latency_ms": 14151.967287063599,
+  "avg_tokens_per_turn": 1981.5
+}

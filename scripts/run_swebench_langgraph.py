@@ -50,6 +50,7 @@ env_path = Path(__file__).parent.parent / "epistemic_fortitude" / ".env"
 load_dotenv(env_path)
 
 from epistemic_fortitude.langgraph_agent import epistemic_graph, ENABLE_ARBITER
+from epistemic_fortitude.langgraph import create_ablation_graph
 from epistemic_fortitude.utils import ExperimentLogger
 
 
@@ -479,7 +480,8 @@ def run_experiment(
     start_index=0,
     arbiter_enabled=True,
     auto_resume=True,
-    skip_existing=False
+    skip_existing=False,
+    ablation=False
 ):
     """Run experiment on multiple SWE-bench examples with LangGraph."""
     print("\n" + "=" * 70)
@@ -490,8 +492,12 @@ def run_experiment(
     json_path = Path(__file__).parent.parent / "data" / "swebench" / "swebench_lite_complete.json"
     print(f"Dataset: {json_path}")
 
-    # Create experiment directory path
-    experiment_id = f"swebench_langgraph_{'arbiter' if arbiter_enabled else 'baseline'}"
+    # Create experiment directory path (include model name to avoid overwriting)
+    model_name = os.getenv("DEFAULT_MODEL", "unknown").replace(".", "-").replace("/", "-")
+    if ablation:
+        experiment_id = f"swebench_langgraph_{model_name}_ablation"
+    else:
+        experiment_id = f"swebench_langgraph_{model_name}_{'arbiter' if arbiter_enabled else 'baseline'}"
     exp_dir = Path(__file__).parent.parent / "logs" / "experiments" / experiment_id
 
     print(f"Experiment: {experiment_id}")
@@ -520,8 +526,21 @@ def run_experiment(
     else:
         print(f"  Start index: {start_index}")
     print(f"  Examples to process: {num_examples}")
-    print(f"  Arbiter: {'ENABLED' if arbiter_enabled else 'DISABLED'}")
-    print(f"  Routing: LLM-only (100% LLM, no keywords)")
+    if ablation:
+        print(f"  Mode: ABLATION (single merged agent, no routing)")
+    else:
+        print(f"  Arbiter: {'ENABLED' if arbiter_enabled else 'DISABLED'}")
+    print(f"  Routing: {'None (ablation)' if ablation else 'LLM-only (100% LLM, no keywords)'}")
+
+    # Print model configuration
+    print(f"\nModel Configuration:")
+    print(f"  Provider: {os.getenv('MODEL_PROVIDER', 'google_genai')}")
+    print(f"  Default Model: {os.getenv('DEFAULT_MODEL', 'not set')}")
+    print(f"  Coordinator Model: {os.getenv('COORDINATOR_MODEL', 'not set')}")
+    print(f"  Arbiter Model: {os.getenv('ARBITER_MODEL', 'not set')}")
+    print(f"  Primary Agent Temp: {os.getenv('PRIMARY_AGENT_TEMPERATURE', '0.7')}")
+    print(f"  Interventional Agent Temp: {os.getenv('INTERVENTIONAL_AGENT_TEMPERATURE', '0.3')}")
+    print(f"  Coordinator Temp: {os.getenv('COORDINATOR_TEMPERATURE', '0.0')}")
 
     # Load examples
     examples = load_swebench_examples(json_path, num_examples, start_index)
@@ -534,7 +553,10 @@ def run_experiment(
     )
 
     # Get compiled graph
-    graph = epistemic_graph
+    if ablation:
+        graph = create_ablation_graph()
+    else:
+        graph = epistemic_graph
 
     # Process examples
     print("\n" + "=" * 70)
@@ -659,6 +681,12 @@ def main():
         default=False,
         help="Skip examples that already have saved logs (useful when switching datasets)"
     )
+    parser.add_argument(
+        "--ablation",
+        action="store_true",
+        default=False,
+        help="Run single-agent ablation (merged prompt, no routing)"
+    )
 
     args = parser.parse_args()
 
@@ -670,7 +698,8 @@ def main():
             num_examples=args.num_examples,
             start_index=args.start_index,
             arbiter_enabled=arbiter_enabled,
-            skip_existing=args.skip_existing
+            skip_existing=args.skip_existing,
+            ablation=args.ablation
         )
 
         print("\n" + "=" * 70)

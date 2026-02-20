@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-12589",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-14T10:55:20.341347",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-14T10:55:24.922325",
+      "user_message": "Django 3.0: \"GROUP BY\" clauses error with tricky field annotation\nDescription\n\t\nLet's pretend that we have next model structure with next model's relations:\nclass A(models.Model):\n\tbs = models.ManyToManyField('B',\n\t\t\t\t\t\t\t\trelated_name=\"a\",\n\t\t\t\t\t\t\t\tthrough=\"AB\")\nclass B(models.Model):\n\tpass\nclass AB(models.Model):\n\ta = models.ForeignKey(A, on_delete=models.CASCADE, related_name=\"ab_a\")\n\tb = models.ForeignKey(B, on_delete=models.CASCADE, related_name=\"ab_b\")\n\tstatus = models.IntegerField()\nclass C(models.Model):\n\ta = models.ForeignKey(\n\t\tA,\n\t\tnull=True,\n\t\tblank=True,\n\t\ton_delete=models.SET_NULL,\n\t\trelated_name=\"c\",\n\t\tverbose_name=_(\"a\")\n\t)\n\tstatus = models.IntegerField()\nLet's try to evaluate next query\nab_query = AB.objects.filter(a=OuterRef(\"pk\"), b=1)\nfilter_conditions = Q(pk=1) | Q(ab_a__b=1)\nquery = A.objects.\\\n\tfilter(filter_conditions).\\\n\tannotate(\n\t\tstatus=Subquery(ab_query.values(\"status\")),\n\t\tc_count=Count(\"c\"),\n)\nanswer = query.values(\"status\").annotate(total_count=Count(\"status\"))\nprint(answer.query)\nprint(answer)\nOn Django 3.0.4 we have an error\ndjango.db.utils.ProgrammingError: column reference \"status\" is ambiguous\nand query is next:\nSELECT (SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = \"test_app_a\".\"id\" AND U0.\"b_id\" = 1)) AS \"status\", COUNT((SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = \"test_app_a\".\"id\" AND U0.\"b_id\" = 1))) AS \"total_count\" FROM \"test_app_a\" LEFT OUTER JOIN \"test_app_ab\" ON (\"test_app_a\".\"id\" = \"test_app_ab\".\"a_id\") LEFT OUTER JOIN \"test_app_c\" ON (\"test_app_a\".\"id\" = \"test_app_c\".\"a_id\") WHERE (\"test_app_a\".\"id\" = 1 OR \"test_app_ab\".\"b_id\" = 1) GROUP BY \"status\"\nHowever, Django 2.2.11 processed this query properly with the next query:\nSELECT (SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = (\"test_app_a\".\"id\") AND U0.\"b_id\" = 1)) AS \"status\", COUNT((SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = (\"test_app_a\".\"id\") AND U0.\"b_id\" = 1))) AS \"total_count\" FROM \"test_app_a\" LEFT OUTER JOIN \"test_app_ab\" ON (\"test_app_a\".\"id\" = \"test_app_ab\".\"a_id\") LEFT OUTER JOIN \"test_app_c\" ON (\"test_app_a\".\"id\" = \"test_app_c\".\"a_id\") WHERE (\"test_app_a\".\"id\" = 1 OR \"test_app_ab\".\"b_id\" = 1) GROUP BY (SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = (\"test_app_a\".\"id\") AND U0.\"b_id\" = 1))\nso, the difference in \"GROUP BY\" clauses\n(as DB provider uses \"django.db.backends.postgresql\", postgresql 11)\n\n\nAdditional context:\nThis is due to a collision of AB.status and the status annotation. The easiest way to solve this issue is to disable group by alias when a collision is detected with involved table columns. This can be easily worked around by avoiding to use an annotation name that conflicts with involved table column names.\n@Simon I think we have the ​check for collision in annotation alias and model fields . How can we find the involved tables columns? Thanks\nHasan this is another kind of collision, these fields are not selected and part of join tables so they won't be part of names. We can't change the behavior at the annotate() level as it would be backward incompatible and require extra checks every time an additional table is joined. What needs to be adjust is sql.Query.set_group_by to set alias=None if alias is not None and alias in {... set of all column names of tables in alias_map ...} before calling annotation.get_group_by_cols ​https://github.com/django/django/blob/fc0fa72ff4cdbf5861a366e31cb8bbacd44da22d/django/db/models/sql/query.py#L1943-L1945",
+      "user_message_length": 3496,
+      "agent_response": "To solve this issue, we need to adjust the `sql.Query.set_group_by` method to set `alias=None` if `alias` is not `None` and `alias` is in the set of all column names of tables in `alias_map`. \n\nHere is the step-by-step solution:\n\n1. **Identify the collision**: The issue arises from the collision between `AB.status` and the `status` annotation. \n\n2. **Understand the root cause**: The root cause is that Django 3.0 is not correctly handling the group by alias when a collision is detected with involved table columns.\n\n3. **Find the involved tables' columns**: To find the involved tables' columns, we need to look at the `alias_map` in the `sql.Query` object. \n\n4. **Adjust `sql.Query.set_group_by`**: We need to adjust the `sql.Query.set_group_by` method to set `alias=None` if `alias` is not `None` and `alias` is in the set of all column names of tables in `alias_map`.\n\nHere's an example of how you can modify your query to avoid the collision:\n\n```python\nab_query = AB.objects.filter(a=OuterRef(\"pk\"), b=1)\nfilter_conditions = Q(pk=1) | Q(ab_a__b=1)\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        ab_status=Subquery(ab_query.values(\"status\")),  # Rename the annotation to avoid collision\n        c_count=Count(\"c\"),\n    )\nanswer = query.values(\"ab_status\").annotate(total_count=Count(\"ab_status\"))  # Use the renamed annotation\nprint(answer.query)\nprint(answer)\n```\n\nIn this modified query, we have renamed the `status` annotation to `ab_status` to avoid the collision with `AB.status`. \n\nIf you want to adjust the `sql.Query.set_group_by` method, you can create a custom `Query` class that inherits from `sql.Query` and overrides the `set_group_by` method. Here's an example:\n\n```python\nfrom django.db.models.sql.query import Query\n\nclass CustomQuery(Query):\n    def set_group_by(self):\n        group_by = []\n        for alias, col in self.annotations.items():\n            if alias in [f for t in self.alias_map.values() for f in t.column_names]:\n                group_by.append(col)\n            else:\n                group_by.append(col, alias=alias)\n        self.group_by = group_by\n```\n\nYou can then use this custom `Query` class in your view or model. However, please note that this is a more complex solution and may require additional modifications to your code. \n\nIt's also worth noting that the Django team is aware of this issue and is working on a fix. You can follow the discussion on the Django GitHub issue tracker for more information. \n\nIn summary, the best solution is to avoid using annotation names that conflict with involved table column names. If you need to use the same name, you can create a custom `Query` class that overrides the `set_group_by` method to handle the collision correctly.",
+      "agent_response_length": 2747,
+      "routed_to": "merged",
+      "latency_ms": 4539.654970169067,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 1290,
+        "completion_tokens": 644,
+        "total_tokens": 1934
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-14T10:55:28.935590",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "In that case, we need to explore other options to resolve the issue.\n\nHere are a few alternatives you can try:\n\n1. **Use a different alias name**: Try using a different alias name that doesn't conflict with the column names in the `AB` model. For example, you can use `ab_status` instead of `status`.\n\n```python\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        ab_status=Subquery(ab_query.values(\"status\")),\n        c_count=Count(\"c\"),\n    )\n```\n\n2. **Use the `output_field` parameter**: You can specify the `output_field` parameter when creating the annotation to avoid conflicts with column names.\n\n```python\nfrom django.db.models import CharField\n\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        status=Subquery(ab_query.values(\"status\"))[:1],\n        c_count=Count(\"c\"),\n    ).values(\"status\").annotate(total_count=Count(\"status\", output_field=CharField()))\n```\n\n3. **Use a custom database function**: If the above solutions don't work, you can create a custom database function to handle the aggregation.\n\n```python\nfrom django.db.models import Func\n\nclass CustomAgg(Func):\n    function = 'ARRAY_AGG'\n    template = '%(function)s(DISTINCT %(expressions)s)'\n\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        status=Subquery(ab_query.values(\"status\"))[:1],\n        c_count=Count(\"c\"),\n    ).values(\"status\").annotate(total_count=CustomAgg(\"status\"))\n```\n\n4. **Upgrade Django**: If none of the above solutions work, you can try upgrading Django to a newer version. The issue may have been fixed in a later version.\n\nPlease note that the above solutions may require modifications to your code and may have performance implications. It's essential to test and verify the solutions before implementing them in your production environment.\n\nIf none of the above solutions work, please provide more details about your code, including the models, views, and templates, and I'll do my best to help you resolve the issue.",
+      "agent_response_length": 1991,
+      "routed_to": "merged",
+      "latency_ms": 3981.9374084472656,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 975,
+        "completion_tokens": 445,
+        "total_tokens": 1420
+      }
+    }
+  ],
+  "total_latency_ms": 8521.592378616333,
+  "total_tokens": 3354,
+  "arbiter_invocations": 0,
+  "end_time": "2026-02-14T10:55:28.935590",
+  "total_turns": 2,
+  "avg_latency_ms": 4260.7961893081665,
+  "avg_tokens_per_turn": 1677.0
+}

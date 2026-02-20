@@ -1,0 +1,57 @@
+{
+  "example_id": "mwaskom__seaborn-3190",
+  "arbiter_enabled": true,
+  "theme": "mwaskom/seaborn",
+  "tags": [
+    "mwaskom/seaborn"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T17:55:14.404046",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T17:55:22.868922",
+      "user_message": "Color mapping fails with boolean data\n```python\r\nso.Plot([\"a\", \"b\"], [1, 2], color=[True, False]).add(so.Bar())\r\n```\r\n```python-traceback\r\n---------------------------------------------------------------------------\r\nTypeError                                 Traceback (most recent call last)\r\n...\r\nFile ~/code/seaborn/seaborn/_core/plot.py:841, in Plot._plot(self, pyplot)\r\n    838 plotter._compute_stats(self, layers)\r\n    840 # Process scale spec for semantic variables and coordinates computed by stat\r\n--> 841 plotter._setup_scales(self, common, layers)\r\n    843 # TODO Remove these after updating other methods\r\n    844 # ---- Maybe have debug= param that attaches these when True?\r\n    845 plotter._data = common\r\n\r\nFile ~/code/seaborn/seaborn/_core/plot.py:1252, in Plotter._setup_scales(self, p, common, layers, variables)\r\n   1250     self._scales[var] = Scale._identity()\r\n   1251 else:\r\n-> 1252     self._scales[var] = scale._setup(var_df[var], prop)\r\n   1254 # Everything below here applies only to coordinate variables\r\n   1255 # We additionally skip it when we're working with a value\r\n   1256 # that is derived from a coordinate we've already processed.\r\n   1257 # e.g., the Stat consumed y and added ymin/ymax. In that case,\r\n   1258 # we've already setup the y scale and ymin/max are in scale space.\r\n   1259 if axis is None or (var != coord and coord in p._variables):\r\n\r\nFile ~/code/seaborn/seaborn/_core/scales.py:351, in ContinuousBase._setup(self, data, prop, axis)\r\n    349 vmin, vmax = axis.convert_units((vmin, vmax))\r\n    350 a = forward(vmin)\r\n--> 351 b = forward(vmax) - forward(vmin)\r\n    353 def normalize(x):\r\n    354     return (x - a) / b\r\n\r\nTypeError: numpy boolean subtract, the `-` operator, is not supported, use the bitwise_xor, the `^` operator, or the logical_xor function instead.\r\n```\n\n\nAdditional context:\nWould this simply mean refactoring the code to use `^` or `xor` functions instead?",
+      "user_message_length": 1931,
+      "agent_response": "This isn’t something you can fix in your own code by just replacing `-` with `^` or `np.logical_xor`. The error is happening *inside* seaborn’s scale setup, because it’s treating your boolean `color` values as if they were numeric and trying to do arithmetic on them.\n\nWhat’s going on:\n\n```python\nso.Plot([\"a\", \"b\"], [1, 2], color=[True, False]).add(so.Bar())\n```\n\n- `color` is being passed boolean data (`[True, False]`).\n- Seaborn’s new `objects` API (`so.Plot`) looks at the data and infers a *continuous* scale for `color` instead of a *categorical* one.\n- In `ContinuousBase._setup`, it does something like:\n\n  ```python\n  vmin, vmax = axis.convert_units((vmin, vmax))\n  a = forward(vmin)\n  b = forward(vmax) - forward(vmin)  # <- this is where bool - bool blows up\n  ```\n\n- For booleans, `forward(vmax) - forward(vmin)` calls numpy’s boolean subtraction, which is not allowed and raises the `TypeError` you see.\n\nSo the fix is to make seaborn treat your `color` data as *categorical* (or otherwise not boolean), not to change operators.\n\n### Workarounds you can use now\n\n1. **Convert booleans to strings (categorical):**\n\n```python\nso.Plot([\"a\", \"b\"], [1, 2], color=[\"True\", \"False\"]).add(so.Bar())\n```\n\nor\n\n```python\nso.Plot([\"a\", \"b\"], [1, 2], color=[str(v) for v in [True, False]]).add(so.Bar())\n```\n\n2. **Convert booleans to an explicit categorical dtype via pandas:**\n\n```python\nimport pandas as pd\nimport seaborn.objects as so\n\ndf = pd.DataFrame({\n    \"x\": [\"a\", \"b\"],\n    \"y\": [1, 2],\n    \"flag\": pd.Categorical([True, False]),\n})\n\nso.Plot(df, x=\"x\", y=\"y\", color=\"flag\").add(so.Bar())\n```\n\n3. **Map booleans to custom labels:**\n\n```python\nlabels = {True: \"Yes\", False: \"No\"}\nso.Plot([\"a\", \"b\"], [1, 2], color=[labels[v] for v in [True, False]]).add(so.Bar())\n```\n\n### Underlying issue\n\n- This is a bug / missing edge‑case handling in seaborn’s continuous scale logic for boolean inputs.\n- A proper fix in seaborn would be:\n  - Either: detect boolean data and treat it as categorical for color.\n  - Or: coerce booleans to integers *before* applying the continuous scale, so subtraction is valid.\n\nIf you’re working on seaborn itself, then yes, *inside seaborn* you’d avoid `bool - bool` by converting to numeric first, e.g.:\n\n```python\ndata = np.asarray(data)\nif data.dtype == bool:\n    data = data.astype(int)\n```\n\nbefore computing `vmin`, `vmax`, etc. But using `^` or `logical_xor` is not semantically correct here: the code wants a numeric range, not a logical XOR.\n\nIf you tell me which seaborn version you’re on, I can suggest whether it’s already fixed in a newer release or help you frame a minimal bug report.",
+      "agent_response_length": 2631,
+      "routed_to": "primary",
+      "latency_ms": 7337.72087097168,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 633,
+        "completion_tokens": 761,
+        "total_tokens": 1394
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T17:55:41.264306",
+      "user_message": "I work on this codebase and that's not what the current implementation does at all.",
+      "user_message_length": 83,
+      "agent_response": "If you’re looking at the current seaborn `objects` code and you don’t see a literal `forward(vmax) - forward(vmin)`, that doesn’t invalidate the diagnosis: the *only* way to get\n\n```\nTypeError: numpy boolean subtract, the `-` operator, is not supported\n```\n\nis that somewhere in the scale/normalization path seaborn (or matplotlib via seaborn) is doing a subtraction where at least one operand is a NumPy boolean array/scalar.\n\nSo either:\n\n1) the code *does* subtract values derived from your boolean data (even if it’s written differently than my pseudocode), or  \n2) the subtraction is happening in a helper (matplotlib transform/normalizer, numpy vectorized op, etc.) that seaborn calls.\n\n### What I’m confident about (technical facts)\n\n- `np.bool_(True) - np.bool_(False)` raises exactly that error.\n- Seaborn’s `so.Plot(..., color=[True, False])` is feeding boolean data into a path that expects numeric (continuous) values.\n- The fix is to ensure booleans are treated as categorical (or coerced to numeric) *before* any numeric normalization/ranging happens.\n\n### How to pinpoint the exact line in *your* tree\n\nRun this minimal repro under a debugger or with a full traceback:\n\n```python\nimport seaborn.objects as so\n\np = so.Plot([\"a\", \"b\"], [1, 2], color=[True, False]).add(so.Bar())\np.plot()\n```\n\nThen inspect the full stack. You’ll see the subtraction site. If you paste the traceback (or the relevant function around the failing line), I can tell you precisely what the current implementation is doing and what the correct patch is.\n\n### Likely current shapes of the code (equivalent behavior, different spelling)\n\nEven if it’s not written as `b - a`, it might be one of these common patterns:\n\n- computing a span/range:\n\n```python\nspan = vmax - vmin\n```\n\n- computing a delta for normalization:\n\n```python\nnormed = (x - vmin) / (vmax - vmin)\n```\n\n- computing bin edges / interpolation:\n\n```python\nnp.linspace(vmin, vmax, n)  # internally uses subtraction\n```\n\n- matplotlib `Normalize(vmin, vmax)` or colormap machinery that computes `(vmax - vmin)` internally\n\nAll of those will explode if `vmin`/`vmax` are `np.bool_` (or arrays of dtype `bool`).\n\n### What the correct codebase fix generally looks like\n\nWherever seaborn decides “continuous vs categorical” for the `color` variable, booleans should not go down the continuous numeric scale path. Two robust options:\n\n**Option A: treat bool as categorical**\n```python\nif is_bool_dtype(values):\n    scale = Nominal()  # or whatever seaborn’s categorical scale class is\n```\n\n**Option B: coerce bool to int for continuous**\n```python\nif is_bool_dtype(values):\n    values = values.astype(int)\n```\n\nOption A is usually the better default for `color` semantics (two discrete groups).\n\n---\n\nIf you want a definitive adjudication, I need one concrete artifact from your side: the full traceback or the exact file+line where it throws. Then I can say “your implementation does X, and that’s why bool hits subtraction here; patch Y is correct.”",
+      "agent_response_length": 2994,
+      "routed_to": "arbiter",
+      "latency_ms": 17409.912824630737,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "I work on this codebase and that's not what the current implementation does at all.",
+      "contradiction_tier": 1,
+      "contradiction_mechanism": "authority",
+      "token_counts": {
+        "prompt_tokens": 1020,
+        "completion_tokens": 724,
+        "total_tokens": 1744
+      }
+    }
+  ],
+  "total_latency_ms": 24747.633695602417,
+  "total_tokens": 3138,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T17:55:41.264306",
+  "total_turns": 2,
+  "avg_latency_ms": 12373.816847801208,
+  "avg_tokens_per_turn": 1569.0
+}

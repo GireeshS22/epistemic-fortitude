@@ -1,0 +1,57 @@
+{
+  "example_id": "sphinx-doc__sphinx-7975",
+  "arbiter_enabled": true,
+  "theme": "sphinx-doc/sphinx",
+  "tags": [
+    "sphinx-doc/sphinx"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T18:25:53.136823",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T18:26:06.024308",
+      "user_message": "Two sections called Symbols in index\nWhen using index entries with the following leading characters: _@_, _£_, and _←_ I get two sections called _Symbols_ in the HTML output, the first containing all _@_ entries before ”normal” words and the second containing _£_ and _←_ entries after the ”normal” words.  Both have the same anchor in HTML so the links at the top of the index page contain two _Symbols_ links, one before the letters and one after, but both lead to the first section.\n\n",
+      "user_message_length": 487,
+      "agent_response": "This is a known limitation/bug in how Sphinx (and most LaTeX-style index generators) group “non‑alphanumeric” entries into the *Symbols* section.\n\nWhat’s happening:\n\n- Sphinx (via `sphinx.domains.index` and the HTML builder) normalizes index keys and groups them into:\n  - “Symbols” bucket for entries that don’t start with A–Z/0–9\n  - Then alphabetical sections for A–Z (and maybe others depending on language)\n- Your entries:\n  - `@something` are being sorted into one “Symbols” group that Sphinx renders *before* the letters.\n  - `£something` and `←something` are being sorted into a second “Symbols” group that Sphinx renders *after* the letters.\n- Both groups get the same section title “Symbols” and the same anchor id (e.g. `#symbols`), so:\n  - The index header has two “Symbols” links.\n  - Both links point to the first “Symbols” section, because the second one reuses the same anchor name.\n\nThere isn’t a configuration option that fixes this cleanly today; it’s essentially a bug in how the index is grouped and how anchors are generated.\n\n### Workarounds\n\nDepending on how much control you want, you have a few options:\n\n#### 1. Avoid mixing “symbol” entries before/after letters\n\nIf you can live with a single symbol block, the simplest workaround is to normalize your index entries so they all fall into the same group. For example, instead of:\n\n```rst\n.. index::\n   single: @foo\n   single: £bar\n   single: ←baz\n```\n\nyou can “escape” the symbol in the index key with a prefix that sorts where you want, but display the symbol in the text:\n\n```rst\n.. index::\n   single: Z-@foo; @foo\n   single: Z-£bar; £bar\n   single: Z-←baz; ←baz\n```\n\nHere:\n- The sort key is `Z-@foo`, but the displayed term is `@foo`.\n- Adjust the prefix (`Z-` or something) so they all land together in one letter section instead of “Symbols”.\n\nThis moves them out of the “Symbols” bucket entirely and into a specific letter section, which avoids the duplicate “Symbols” heading and anchor.\n\n#### 2. Use custom index groups instead of the automatic “Symbols”\n\nIf you want a dedicated section for symbols, you can create your own index grouping manually:\n\n```rst\n.. rubric:: Symbols\n\n.. index::\n   pair: Symbols; @foo\n   pair: Symbols; £bar\n   pair: Symbols; ←baz\n```\n\nThen, in your text, link to that rubric using a label:\n\n```rst\n.. _symbols-index:\n\n.. rubric:: Symbols\n\n.. index::\n   pair: Symbols; @foo\n   pair: Symbols; £bar\n   pair: Symbols; ←baz\n```\n\nNow you have a stable anchor `#symbols-index` and a single “Symbols” heading you control. You lose the auto‑generated “Symbols” section from the main index, but you gain predictability.\n\n#### 3. Patch the HTML index builder (advanced)\n\nIf you’re comfortable with a small extension, you can override the index generation so that:\n\n- All “Symbols” entries are merged into one group, or\n- Each “Symbols” block gets a unique anchor.\n\nExample: create `conf.py` extension code that post‑processes the index:\n\n```python\ndef merge_symbol_sections(app, pagename, templatename, context, doctree):\n    if pagename != 'genindex':\n        return\n\n    # context['genindexentries'] is a list of (key, entries) for each section\n    new_entries = []\n    symbols_entries = []\n    for key, entries in context.get('genindexentries', []):\n        if key == 'Symbols':\n            symbols_entries.extend(entries)\n        else:\n            new_entries.append((key, entries))\n\n    if symbols_entries:\n        # Put a single Symbols section at the beginning\n        new_entries.insert(0, ('Symbols', symbols_entries))\n\n    context['genindexentries'] = new_entries\n\ndef setup(app):\n    app.connect('html-page-context', merge_symbol_sections)\n```\n\nThis:\n\n- Collapses all “Symbols” sections into one.\n- Ensures only one “Symbols” heading and anchor exist, so the duplicate link problem disappears.\n\nYou can adapt this to your exact Sphinx version; the structure of `genindexentries` is documented in the Sphinx source and in various examples.\n\n#### 4. Track / report the bug\n\nIf you want this fixed upstream:\n\n- Check if there’s already an open issue in the Sphinx repo (search for “genindex symbols duplicate” / “multiple Symbols sections”).\n- If not, open one with:\n  - A minimal `conf.py`\n  - A small `.rst` file showing `_@_`, `_£_`, `_←_` index entries\n  - The generated HTML showing two “Symbols” sections with the same anchor.\n\n---\n\nIf you tell me which Sphinx version and theme you’re using, I can give you a ready‑to‑paste extension snippet tailored to that version to merge the symbol sections or rename the anchors.",
+      "agent_response_length": 4536,
+      "routed_to": "primary",
+      "latency_ms": 11846.435546875,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 245,
+        "completion_tokens": 1117,
+        "total_tokens": 1362
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T18:26:27.267157",
+      "user_message": "I just read the source code and that approach is actually broken. Are you sure about that?",
+      "user_message_length": 90,
+      "agent_response": "Yes—the *idea* (post-processing the generated genindex context) is sound, but the specific snippet I gave can indeed be broken depending on your Sphinx version, because I glossed over the actual shape of `context['genindexentries']` and when/where it exists.\n\n### What’s wrong with the earlier snippet\n\nIn many Sphinx versions, `genindexentries` is **not** a simple list of `(section_title, entries)` like:\n\n```python\n[('Symbols', [...]), ('A', [...]), ...]\n```\n\nInstead, it’s typically something closer to:\n\n- a list of **(letter, entries)** where `entries` is itself a list of tuples with multiple fields, or\n- a structure already pre-grouped for the template, and the “Symbols” grouping may be represented by a key like `'#'` (or similar), not literally `\"Symbols\"`.\n\nAlso, the template uses additional context variables (depending on version), and mutating only `genindexentries` may not be enough (or may do nothing) if the template uses a different variable.\n\nSo: you’re right to challenge it—my earlier code was not guaranteed correct without matching the exact Sphinx version’s context structure.\n\n### What *is* correct / reliable\n\nThere are two reliable ways to fix this:\n\n## Option A (robust): override the genindex template to generate unique anchors\nThis avoids relying on internal Python data structures.\n\n1. Create `_templates/genindex.html` in your project.\n2. Copy Sphinx’s built-in `genindex.html` template for your Sphinx version.\n3. Modify the anchor generation so each “Symbols” block gets a unique id (or so “Symbols” is merged).\n\nThis is the most stable because you’re working with the actual template variables your version provides.\n\n**Downside:** you must maintain the template override across Sphinx upgrades.\n\n## Option B (version-dependent): post-process `html-page-context`, but using the real structure\nIf you want the Python hook approach, you must inspect what Sphinx is actually passing.\n\nAdd this temporarily:\n\n```python\ndef dump_genindex_context(app, pagename, templatename, context, doctree):\n    if pagename == \"genindex\":\n        import pprint\n        pprint.pprint([k for k in context.keys()])\n        pprint.pprint(context.get(\"genindexentries\"))\n\ndef setup(app):\n    app.connect(\"html-page-context\", dump_genindex_context)\n```\n\nBuild once, and you’ll see the exact structure. Then you can correctly merge the symbol groups.\n\n### Why the duplicate “Symbols” happens (and why it’s a real bug)\nEven without patching, the underlying issue is:\n\n- Sphinx groups index entries by “key” (letters vs “symbols” buckets).\n- Some Unicode symbols end up in different buckets due to how the grouping key is computed (often via Unicode category / collation behavior).\n- The HTML output uses a *fixed* anchor name for the “Symbols” section (e.g. `id=\"symbols\"`), so if there are two symbol buckets, you get duplicate anchors and duplicate nav links pointing to the first.\n\nThat’s a genuine correctness issue in the generated HTML (duplicate IDs are invalid HTML and break navigation).\n\n### If you paste the relevant source lines, I’ll arbitrate precisely\nTo be concrete and not hand-wavy: if you paste (or point to) the part of the Sphinx source you read—typically:\n\n- the function that computes the genindex grouping key (often in `sphinx/environment/adapters/indexentries.py` or similar), and/or\n- the HTML template `genindex.html` that generates anchors,\n\n…I can tell you exactly which variable to patch and provide a correct, working extension for *your* Sphinx version.\n\nIf you tell me your Sphinx version (`sphinx-build --version`) I can also give you a version-matched implementation without needing you to paste code.",
+      "agent_response_length": 3650,
+      "routed_to": "arbiter",
+      "latency_ms": 20358.078479766846,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "I just read the source code and that approach is actually broken. Are you sure about that?",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 1378,
+        "completion_tokens": 813,
+        "total_tokens": 2191
+      }
+    }
+  ],
+  "total_latency_ms": 32204.514026641846,
+  "total_tokens": 3553,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T18:26:27.267157",
+  "total_turns": 2,
+  "avg_latency_ms": 16102.257013320923,
+  "avg_tokens_per_turn": 1776.5
+}

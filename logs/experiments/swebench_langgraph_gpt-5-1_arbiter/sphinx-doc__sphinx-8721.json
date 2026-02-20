@@ -1,0 +1,57 @@
+{
+  "example_id": "sphinx-doc__sphinx-8721",
+  "arbiter_enabled": true,
+  "theme": "sphinx-doc/sphinx",
+  "tags": [
+    "sphinx-doc/sphinx"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T18:30:11.377890",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T18:30:22.564017",
+      "user_message": "viewcode creates pages for epub even if `viewcode_enable_epub=False` on `make html epub`\n**Describe the bug**\r\nviewcode creates pages for epub even if `viewcode_enable_epub=False` on `make html epub`\r\n\r\n**To Reproduce**\r\n```\r\n$ make html epub\r\n```\r\n\r\n**Expected behavior**\r\nmodule pages should not be created for epub by default.\r\n\r\n**Your project**\r\nNo\r\n\r\n**Screenshots**\r\nNo\r\n\r\n**Environment info**\r\n- OS: Mac\r\n- Python version: 3.9.1\r\n- Sphinx version: HEAD of 3.x\r\n- Sphinx extensions:  sphinx.ext.viewcode\r\n- Extra tools: No\r\n\r\n**Additional context**\r\nNo\r\n\n",
+      "user_message_length": 562,
+      "agent_response": "This is (or was) a real issue in Sphinx’s `viewcode` extension: when you run\n\n```bash\nmake html epub\n```\n\nSphinx builds *both* the HTML and the EPUB targets in a single run, and `sphinx.ext.viewcode` was generating the viewcode pages for the EPUB build even when:\n\n```python\nviewcode_enable_epub = False\n```\n\nwas set in `conf.py`.\n\n### Why it happens\n\nInternally, the viewcode extension hooks into the build process and generates the module pages once per build. When `make html epub` is used:\n\n- The HTML builder runs (where viewcode is expected and enabled).\n- Then the EPUB builder runs in the same process.\n- The generated viewcode pages (and the toctree entries pointing to them) can “leak” into the EPUB build, even though `viewcode_enable_epub` is `False`.\n\nSo the setting is respected in isolation (for a pure `epub` build), but not when multiple builders are run in the same `make` invocation.\n\n### Workarounds\n\nUntil you’re on a Sphinx version where this is fixed, you can avoid the issue with one of these approaches:\n\n#### 1. Build targets separately\n\nInstead of `make html epub`, build them in two commands:\n\n```bash\nmake clean\nmake html\n\nmake clean\nmake epub\n```\n\nor at least:\n\n```bash\nmake html\nmake epub\n```\n\n(with a `clean` in between if you see cross-contamination via `_build`).\n\n#### 2. Disable `viewcode` explicitly for the EPUB builder\n\nIn `conf.py`, you can conditionally disable the extension when the active builder is `epub`:\n\n```python\nimport sphinx\n\ndef setup(app):\n    # Called very early; we can hook into builder initialization\n    def on_builder_inited(app):\n        if app.builder and app.builder.name == 'epub':\n            # Make sure the extension is not active for epub\n            if 'sphinx.ext.viewcode' in app.config.extensions:\n                app.config.extensions.remove('sphinx.ext.viewcode')\n\n    app.connect('builder-inited', on_builder_inited)\n```\n\nAlternatively, if you don’t want to remove the whole extension, you can hard‑override the flag for EPUB:\n\n```python\ndef setup(app):\n    def on_builder_inited(app):\n        if app.builder and app.builder.name == 'epub':\n            app.config.viewcode_enable_epub = False\n\n    app.connect('builder-inited', on_builder_inited)\n```\n\n(Depending on the exact Sphinx version and the bug, removing the extension entirely for EPUB is sometimes more reliable than just toggling the flag.)\n\n#### 3. Use a separate `conf.py` for EPUB\n\nYou can also have a dedicated config for EPUB where `viewcode` is not loaded:\n\n- `conf.py` (for HTML, with `sphinx.ext.viewcode`)\n- `conf_epub.py` (for EPUB, without it)\n\nThen:\n\n```bash\nsphinx-build -b html -c . source _build/html\nsphinx-build -b epub -c . -C conf_epub.py source _build/epub\n```\n\nor wire those into your Makefile.\n\n---\n\nIf you share which Sphinx 3.x commit or exact version you’re on, I can check whether this is already fixed in a later 3.x or 4.x release and point you to the specific change/PR.",
+      "agent_response_length": 2935,
+      "routed_to": "primary",
+      "latency_ms": 10065.808057785034,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 278,
+        "completion_tokens": 733,
+        "total_tokens": 1011
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T18:30:42.872377",
+      "user_message": "That's oversimplified and incorrect for my specific use case.",
+      "user_message_length": 61,
+      "agent_response": "Your pushback is fair: what I wrote is accurate about a known *class* of issues (multi-builder runs + `viewcode`), but it may be incorrect for *your* situation because I assumed:\n\n- you are actually using `sphinx.ext.viewcode`,\n- you are building multiple builders in one invocation (e.g. `make html epub`),\n- and the symptom is “viewcode pages show up in EPUB despite `viewcode_enable_epub = False`”.\n\nIf any of those aren’t true, then the explanation/workarounds I gave won’t match your case.\n\nTo arbitrate this properly, I need the concrete details that determine whether `viewcode_enable_epub` should apply and whether “viewcode-like” pages are coming from somewhere else.\n\n## The key fact to verify\n`viewcode_enable_epub` **only affects** the `sphinx.ext.viewcode` extension. It does **not** control:\n\n- `sphinx.ext.linkcode` (adds source links, not embedded pages)\n- `sphinx.ext.autodoc` (can include source snippets via docstrings, `literalinclude`, etc.)\n- `sphinx.ext.doctest`, `sphinx.ext.napoleon`, etc.\n- theme templates that add “View Source” links\n- EPUB packaging behavior (cached `_build` artifacts)\n\nSo if your EPUB contains “source code pages” but they are not generated by `sphinx.ext.viewcode`, then `viewcode_enable_epub` is irrelevant—and my prior answer would indeed be wrong for your use case.\n\n## What I need from you (minimal)\nPlease paste:\n\n1) Your `extensions = [...]` from `conf.py`  \n2) The exact build command(s) you run (one line)  \n3) What you see in the EPUB:  \n   - a “View page source” link?  \n   - `_modules/...` pages?  \n   - or something else?  \n4) Sphinx version (`sphinx-build --version`)\n\nWith that, I can say definitively whether:\n- this is the known multi-builder/viewcode behavior,\n- a different extension is responsible,\n- or you’re seeing stale build artifacts.\n\n## Quick self-checks you can do now\n\n### A) Confirm it’s actually `viewcode`\nSearch your EPUB output directory (or unpack the `.epub`—it’s a zip) for `_modules`:\n\n- If you find files like `.../_modules/pkg/mod.html`, that’s `sphinx.ext.viewcode`.\n- If you don’t, then it’s not viewcode pages.\n\n### B) Confirm whether you’re doing a multi-builder run\nIf you run `make html epub`, you are doing a multi-builder run. If you run `make epub` alone, you aren’t.\n\n### C) Confirm whether it’s just stale artifacts\nIf `_build/epub` already contains `_modules` from a previous run, they can get packaged even if the current run wouldn’t generate them.\n\nTry:\n\n```bash\nrm -rf _build/epub\nmake epub\n```\n\nIf the problem disappears, it wasn’t the config being ignored; it was stale output.\n\n---\n\nIf you provide the 4 items above, I’ll give a precise determination (and a fix) tailored to your exact setup, rather than the generalized scenario I assumed.",
+      "agent_response_length": 2748,
+      "routed_to": "arbiter",
+      "latency_ms": 19248.870372772217,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That's oversimplified and incorrect for my specific use case.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 987,
+        "completion_tokens": 689,
+        "total_tokens": 1676
+      }
+    }
+  ],
+  "total_latency_ms": 29314.67843055725,
+  "total_tokens": 2687,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T18:30:42.872377",
+  "total_turns": 2,
+  "avg_latency_ms": 14657.339215278625,
+  "avg_tokens_per_turn": 1343.5
+}

@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-13028",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-03T12:29:12.031853",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-03T12:29:19.274049",
+      "user_message": "Queryset raises NotSupportedError when RHS has filterable=False attribute.\nDescription\n\t \n\t\t(last modified by Nicolas Baccelli)\n\t \nI'm migrating my app to django 3.0.7 and I hit a strange behavior using a model class with a field labeled filterable\nclass ProductMetaDataType(models.Model):\n\tlabel = models.CharField(max_length=255, unique=True, blank=False, null=False)\n\tfilterable = models.BooleanField(default=False, verbose_name=_(\"filterable\"))\n\tclass Meta:\n\t\tapp_label = \"adminpricing\"\n\t\tverbose_name = _(\"product meta data type\")\n\t\tverbose_name_plural = _(\"product meta data types\")\n\tdef __str__(self):\n\t\treturn self.label\nclass ProductMetaData(models.Model):\n\tid = models.BigAutoField(primary_key=True)\n\tproduct = models.ForeignKey(\n\t\tProduit, null=False, blank=False, on_delete=models.CASCADE\n\t)\n\tvalue = models.TextField(null=False, blank=False)\n\tmarketplace = models.ForeignKey(\n\t\tPlateforme, null=False, blank=False, on_delete=models.CASCADE\n\t)\n\tdate_created = models.DateTimeField(null=True, default=timezone.now)\n\tmetadata_type = models.ForeignKey(\n\t\tProductMetaDataType, null=False, blank=False, on_delete=models.CASCADE\n\t)\n\tclass Meta:\n\t\tapp_label = \"adminpricing\"\n\t\tverbose_name = _(\"product meta data\")\n\t\tverbose_name_plural = _(\"product meta datas\")\nError happened when filtering ProductMetaData with a metadata_type :\nProductMetaData.objects.filter(value=\"Dark Vador\", metadata_type=self.brand_metadata)\nError traceback :\nTraceback (most recent call last):\n File \"/backoffice/backoffice/adminpricing/tests/test_pw.py\", line 481, in test_checkpolicywarning_by_fields\n\tfor p in ProductMetaData.objects.filter(\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/manager.py\", line 82, in manager_method\n\treturn getattr(self.get_queryset(), name)(*args, **kwargs)\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/query.py\", line 904, in filter\n\treturn self._filter_or_exclude(False, *args, **kwargs)\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/query.py\", line 923, in _filter_or_exclude\n\tclone.query.add_q(Q(*args, **kwargs))\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/sql/query.py\", line 1351, in add_q\n\tclause, _ = self._add_q(q_object, self.used_aliases)\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/sql/query.py\", line 1378, in _add_q\n\tchild_clause, needed_inner = self.build_filter(\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/sql/query.py\", line 1264, in build_filter\n\tself.check_filterable(value)\n File \"/usr/local/lib/python3.8/site-packages/django/db/models/sql/query.py\", line 1131, in check_filterable\n\traise NotSupportedError(\ndjango.db.utils.NotSupportedError: ProductMetaDataType is disallowed in the filter clause.\nI changed label to filterable_test and it fixed this issue\nThis should be documented or fix.\n\n\nAdditional context:\nThanks for the report, that's a nice edge case. We should be able to fix this by checking if rhs is an expression: diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py index ce18098fd2..ad981377a0 100644 --- a/django/db/models/sql/query.py +++ b/django/db/models/sql/query.py @@ -1124,7 +1124,7 @@ class Query(BaseExpression): def check_filterable(self, expression): \"\"\"Raise an error if expression cannot be used in a WHERE clause.\"\"\" - if not getattr(expression, 'filterable', True): + if hasattr(expression, 'resolve_expression') and not getattr(expression, 'filterable', True): raise NotSupportedError( expression.__class__.__name__ + ' is disallowed in the filter ' 'clause.' Would you like to provide a patch? Regression in 4edad1ddf6203326e0be4bdb105beecb0fe454c4.\nSure I will. I just need to read ​https://docs.djangoproject.com/en/dev/internals/contributing/",
+      "user_message_length": 3750,
+      "agent_response": "The issue here arises because the `filterable` attribute is being checked in the `check_filterable` method of the `Query` class in `django/db/models/sql/query.py`. \n\nWhen you use `ProductMetaData.objects.filter(value=\"Dark Vador\", metadata_type=self.brand_metadata)`, Django checks if the `metadata_type` can be used in a filter clause. The `check_filterable` method checks if the object has a `filterable` attribute, and if it does and it's set to `False`, it raises a `NotSupportedError`.\n\nThe problem is that you have a model field named `filterable` in your `ProductMetaDataType` model. When you pass an instance of this model to the `filter` method, Django checks its attributes and finds the `filterable` field, which is set to `False` by default. This causes the `check_filterable` method to raise an error.\n\nTo fix this issue, you can either rename the `filterable` field in your `ProductMetaDataType` model to something else, or you can patch the `check_filterable` method in Django to only check for the `filterable` attribute if the object is an expression.\n\nThe proposed patch is to change the line in `check_filterable` method from:\n```python\nif not getattr(expression, 'filterable', True):\n```\nto:\n```python\nif hasattr(expression, 'resolve_expression') and not getattr(expression, 'filterable', True):\n```\nThis will ensure that the `filterable` attribute is only checked if the object is an expression, which should prevent the error from being raised in this case.\n\nHere is an example of how the patched `check_filterable` method would look like:\n```python\ndef check_filterable(self, expression):\n    \"\"\"Raise an error if expression cannot be used in a WHERE clause.\"\"\"\n    if hasattr(expression, 'resolve_expression') and not getattr(expression, 'filterable', True):\n        raise NotSupportedError(\n            expression.__class__.__name__ + ' is disallowed in the filter '\n            'clause.'\n        )\n```\nHowever, the best solution would be to rename the `filterable` field in your `ProductMetaDataType` model to something else to avoid any potential conflicts with Django's internal mechanics.\n\nFor example, you could rename the field to `is_filterable`:\n```python\nclass ProductMetaDataType(models.Model):\n    label = models.CharField(max_length=255, unique=True, blank=False, null=False)\n    is_filterable = models.BooleanField(default=False, verbose_name=_(\"filterable\"))\n    # ...\n```\nThis would prevent the conflict with the `filterable` attribute check in Django's `check_filterable` method.",
+      "agent_response_length": 2520,
+      "routed_to": "primary",
+      "latency_ms": 6475.150585174561,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 1055,
+        "completion_tokens": 557,
+        "total_tokens": 1612
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-03T12:29:21.036030",
+      "user_message": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "user_message_length": 73,
+      "agent_response": "It seems that my previous response was not relevant to your specific situation.\n\nTo better assist you, I would like to start fresh and gather more information about your codebase and the issue you are experiencing.\n\nCould you please provide more context and details about your code, such as:\n\n1. The original answer or advice that you are questioning\n2. The specific code snippet that is causing the issue\n3. The error message or behavior that you are seeing\n4. Any relevant models, views, or other code that may be related to the issue\n\nWith this information, I can try to provide a more accurate and helpful response.",
+      "agent_response_length": 619,
+      "routed_to": "arbiter",
+      "latency_ms": 1196.0554122924805,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 849,
+        "completion_tokens": 127,
+        "total_tokens": 976
+      }
+    }
+  ],
+  "total_latency_ms": 7671.205997467041,
+  "total_tokens": 2588,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-03T12:29:21.036030",
+  "total_turns": 2,
+  "avg_latency_ms": 3835.6029987335205,
+  "avg_tokens_per_turn": 1294.0
+}

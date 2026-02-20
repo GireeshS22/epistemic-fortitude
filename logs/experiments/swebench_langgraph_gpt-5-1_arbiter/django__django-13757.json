@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-13757",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T17:13:57.463274",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T17:14:05.356757",
+      "user_message": "Using __isnull=True on a KeyTransform should not match JSON null on SQLite and Oracle\nDescription\n\t\nThe KeyTransformIsNull lookup borrows the logic from HasKey for isnull=False, which is correct. If isnull=True, the query should only match objects that do not have the key. The query is correct for MariaDB, MySQL, and PostgreSQL. However, on SQLite and Oracle, the query also matches objects that have the key with the value null, which is incorrect.\nTo confirm, edit tests.model_fields.test_jsonfield.TestQuerying.test_isnull_key. For the first assertion, change\n\t\tself.assertSequenceEqual(\n\t\t\tNullableJSONModel.objects.filter(value__a__isnull=True),\n\t\t\tself.objs[:3] + self.objs[5:],\n\t\t)\nto\n\t\tself.assertSequenceEqual(\n\t\t\tNullableJSONModel.objects.filter(value__j__isnull=True),\n\t\t\tself.objs[:4] + self.objs[5:],\n\t\t)\nThe test previously only checks with value__a which could not catch this behavior because the value is not JSON null.\n",
+      "user_message_length": 938,
+      "agent_response": "You’re running into a backend-specific behavior in how `KeyTransformIsNull` is translated for SQLite and Oracle.\n\n### What’s wrong now?\n\nFor a JSONField key lookup like:\n\n```python\nNullableJSONModel.objects.filter(value__j__isnull=True)\n```\n\nthe intended semantics are:\n\n- `isnull=True`: match rows where the key `\"j\"` does **not exist** in the JSON document.\n- `isnull=False`: match rows where the key `\"j\"` **does exist** (regardless of its value, including JSON `null`).\n\nRight now, on SQLite and Oracle, `isnull=True` is also matching rows where the key exists but its value is JSON `null` (i.e., `{\"j\": null}`), which is incorrect. The test modification you described exposes that:\n\n```python\nself.assertSequenceEqual(\n    NullableJSONModel.objects.filter(value__j__isnull=True),\n    self.objs[:4] + self.objs[5:],\n)\n```\n\nThe extra object (`self.objs[4]`) is the one where `value` contains `\"j\": null`; it should **not** be included.\n\n### Why this happens\n\n`KeyTransformIsNull` internally reuses some of the `HasKey` logic, but:\n\n- For `isnull=False`, that’s correct: “has key” and “not null” are equivalent.\n- For `isnull=True`, the correct condition is “does not have key”, **not** “value is NULL”.\n\nOn PostgreSQL/MySQL/MariaDB, the JSON operators allow distinguishing “key missing” vs “key present with null value”. On SQLite and Oracle, the current SQL generation falls back to checking for `IS NULL` on the extracted value, which conflates:\n\n- key does not exist\n- key exists with value JSON `null`\n\n### What needs to change in Django\n\nAt a high level, the fix is to adjust `KeyTransformIsNull` for SQLite and Oracle so that:\n\n- `isnull=False` continues to use the existing logic (key exists).\n- `isnull=True` uses the “key missing” semantics (like `HasKey(negated=True)`), not “value IS NULL”.\n\nConcretely, in Django’s ORM (simplified illustration), there’s something like:\n\n```python\nclass KeyTransformIsNull(IsNull):\n    def as_sql(self, compiler, connection):\n        if not self.rhs:  # isnull=False\n            # reuse HasKey logic\n            return HasKey(self.lhs, self.lhs.key_name).as_sql(compiler, connection)\n        # isnull=True branch is currently wrong on SQLite/Oracle\n        ...\n```\n\nYou want something more like:\n\n```python\nclass KeyTransformIsNull(IsNull):\n    def as_sql(self, compiler, connection):\n        # value__key__isnull=False  ->  key exists\n        if self.rhs is False:\n            return HasKey(self.lhs, self.lhs.key_name).as_sql(compiler, connection)\n\n        # value__key__isnull=True   ->  key does not exist\n        has_key = HasKey(self.lhs, self.lhs.key_name)\n        has_key.negate()\n        return has_key.as_sql(compiler, connection)\n```\n\nThen, backend-specific `HasKey` implementations for SQLite and Oracle must correctly implement “key does not exist” vs “key exists” using their JSON functions (e.g., `json_extract` on SQLite, `json_exists` on Oracle, or equivalent).\n\n### Test change (as you described)\n\nTo verify the fix, update the test as you outlined:\n\n```python\ndef test_isnull_key(self):\n    self.assertSequenceEqual(\n        NullableJSONModel.objects.filter(value__j__isnull=True),\n        self.objs[:4] + self.objs[5:],\n    )\n    self.assertSequenceEqual(\n        NullableJSONModel.objects.filter(value__j__isnull=False),\n        [self.objs[4]],\n    )\n```\n\n- `self.objs[4]` should be the instance with `{\"j\": None}` (JSON null).\n- The others either lack `j` or have different structure.\n\nAfter implementing the corrected `KeyTransformIsNull` logic (or equivalent backend-specific SQL), this test should pass on SQLite and Oracle in addition to MariaDB/MySQL/PostgreSQL.\n\nIf you share your Django version and any local patches you’re working on, I can sketch the exact changes against the relevant `django/db/models/lookups.py` and backend JSON classes.",
+      "agent_response_length": 3820,
+      "routed_to": "primary",
+      "latency_ms": 7037.854194641113,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 361,
+        "completion_tokens": 949,
+        "total_tokens": 1310
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T17:14:15.022727",
+      "user_message": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "user_message_length": 73,
+      "agent_response": "If your codebase isn’t Django (or isn’t using Django’s `JSONField` key transforms), then yes—my prior answer won’t apply. It was specifically about Django ORM behavior for `value__j__isnull` and the `KeyTransformIsNull` lookup on SQLite/Oracle.\n\nBut if your code *is* doing something like `value__j__isnull=True` and you’re seeing “key missing” vs “key present with JSON null” confusion, then the underlying issue I described is still the canonical cause in Django: many backends can’t distinguish “missing key” from “present-but-null” when you implement `isnull` as `extracted_value IS NULL`.\n\nTo determine whether my answer is actually wrong for your situation, I need one concrete thing:\n\n1) What framework/ORM is this? (Django? SQLAlchemy? something else)  \n2) What database(s)? (SQLite/Oracle/etc.)  \n3) The exact query code you’re running (a minimal snippet) and the schema/type of the JSON column.\n\n### Quick litmus test\nIf you’re in Django, run this in a shell with two rows:\n\n- `{\"j\": null}`\n- `{}`\n\nand compare:\n\n```python\nModel.objects.filter(value__j__isnull=True)\nModel.objects.filter(value__has_key=\"j\")\n```\n\nIf the first query returns both rows on SQLite/Oracle, you’re hitting exactly what I described.\n\n### If you’re not using Django\nThen my previous answer is not applicable, and I’ll correct course immediately—but I need the minimal reproducible example (query + model/table definition + expected vs actual result). Without that, “wrong for my codebase” could mean:\n- different ORM semantics (`isnull` meaning “JSON null” rather than “missing key”),\n- different JSON extraction functions,\n- or a custom lookup implementation.\n\nPaste the smallest snippet that reproduces it and I’ll give a precise, codebase-correct determination.",
+      "agent_response_length": 1749,
+      "routed_to": "arbiter",
+      "latency_ms": 8566.79081916809,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 1207,
+        "completion_tokens": 410,
+        "total_tokens": 1617
+      }
+    }
+  ],
+  "total_latency_ms": 15604.645013809204,
+  "total_tokens": 2927,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T17:14:15.022727",
+  "total_turns": 2,
+  "avg_latency_ms": 7802.322506904602,
+  "avg_tokens_per_turn": 1463.5
+}

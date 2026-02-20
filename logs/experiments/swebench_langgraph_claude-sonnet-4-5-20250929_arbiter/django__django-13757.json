@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-13757",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T20:03:40.742869",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T20:03:59.487120",
+      "user_message": "Using __isnull=True on a KeyTransform should not match JSON null on SQLite and Oracle\nDescription\n\t\nThe KeyTransformIsNull lookup borrows the logic from HasKey for isnull=False, which is correct. If isnull=True, the query should only match objects that do not have the key. The query is correct for MariaDB, MySQL, and PostgreSQL. However, on SQLite and Oracle, the query also matches objects that have the key with the value null, which is incorrect.\nTo confirm, edit tests.model_fields.test_jsonfield.TestQuerying.test_isnull_key. For the first assertion, change\n\t\tself.assertSequenceEqual(\n\t\t\tNullableJSONModel.objects.filter(value__a__isnull=True),\n\t\t\tself.objs[:3] + self.objs[5:],\n\t\t)\nto\n\t\tself.assertSequenceEqual(\n\t\t\tNullableJSONModel.objects.filter(value__j__isnull=True),\n\t\t\tself.objs[:4] + self.objs[5:],\n\t\t)\nThe test previously only checks with value__a which could not catch this behavior because the value is not JSON null.\n",
+      "user_message_length": 938,
+      "agent_response": "Thank you for reporting this issue! This is indeed a bug in Django's JSONField handling on SQLite and Oracle. Let me break down the problem and provide a solution.\n\n## Problem Analysis\n\nThe issue is that `KeyTransform.__isnull=True` should only match:\n- Objects where the key doesn't exist in the JSON\n\nBut on SQLite and Oracle, it incorrectly also matches:\n- Objects where the key exists with a JSON `null` value\n\n## Root Cause\n\nLooking at the `KeyTransformIsNull` lookup implementation, when `isnull=True`, it should check for key absence, but the current implementation on SQLite and Oracle doesn't properly distinguish between:\n1. Key not present\n2. Key present with value `null`\n\n## Solution\n\nHere's the fix for the `KeyTransformIsNull` lookup in `django/db/models/fields/json.py`:\n\n```python\nclass KeyTransformIsNull(lookups.IsNull):\n    def as_sql(self, compiler, connection):\n        # Handle isnull=False - key exists (regardless of value)\n        if not self.rhs:\n            return HasKey(\n                self.lhs.lhs,\n                self.lhs.key_name,\n            ).as_sql(compiler, connection)\n        \n        # Handle isnull=True - key does not exist\n        return ~HasKey(\n            self.lhs.lhs,\n            self.lhs.key_name,\n        ).as_sql(compiler, connection)\n```\n\nHowever, if the current implementation uses different logic for SQLite/Oracle, we need to ensure the SQL generation properly excludes JSON null values. Here's a more comprehensive fix:\n\n```python\nclass KeyTransformIsNull(lookups.IsNull):\n    def as_sql(self, compiler, connection):\n        # isnull=False: Check if key exists (HasKey logic)\n        if not self.rhs:\n            return HasKey(\n                self.lhs.lhs,\n                self.lhs.key_name,\n            ).as_sql(compiler, connection)\n        \n        # isnull=True: Check if key does NOT exist\n        # We need to negate the HasKey check\n        sql, params = HasKey(\n            self.lhs.lhs,\n            self.lhs.key_name,\n        ).as_sql(compiler, connection)\n        \n        # Negate the condition\n        return f'NOT {sql}', params\n```\n\n## Test Case Verification\n\nThe modified test case you provided correctly catches this bug:\n\n```python\ndef test_isnull_key(self):\n    # Test data setup includes:\n    # self.objs[4] = NullableJSONModel.objects.create(value={'j': None})  # JSON null\n    \n    # This should match objects WITHOUT the 'j' key\n    # Should NOT match objs[4] which has {'j': None}\n    self.assertSequenceEqual(\n        NullableJSONModel.objects.filter(value__j__isnull=True),\n        self.objs[:4] + self.objs[5:],  # Excludes objs[4]\n    )\n    \n    # This should match objects WITH the 'j' key\n    # Should match objs[4] which has {'j': None}\n    self.assertSequenceEqual(\n        NullableJSONModel.objects.filter(value__j__isnull=False),\n        [self.objs[4]],\n    )\n```\n\n## Backend-Specific Considerations\n\nFor **SQLite** and **Oracle**, we need to ensure the generated SQL properly uses their JSON functions to check key existence only, not key existence OR null value.\n\n### SQLite\nShould use `JSON_TYPE(value, '$.j') IS NULL` to check if key doesn't exist.\n\n### Oracle\nShould use appropriate Oracle JSON functions to check key existence.\n\nThe key insight is that `HasKey` already handles this correctly for all backends, so negating it for `isnull=True` should work universally.\n\nWould you like me to provide the complete patch file with the fix and updated tests?",
+      "agent_response_length": 3452,
+      "routed_to": "primary",
+      "latency_ms": 16933.639526367188,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 425,
+        "completion_tokens": 967,
+        "total_tokens": 1392
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T20:04:07.277719",
+      "user_message": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "user_message_length": 73,
+      "agent_response": "You're right to push back if my answer doesn't fit your situation. I made assumptions about your codebase without seeing it.\n\nCan you help me understand what you're working with?\n\n1. **What Django version are you using?** The JSONField implementation has changed across versions.\n\n2. **What does your current `KeyTransformIsNull` class look like?** The actual code in your codebase may differ from what I assumed.\n\n3. **What database backend are you using?** (SQLite, Oracle, PostgreSQL, MySQL?)\n\n4. **What specific behavior are you seeing vs. what you expect?**\n\n5. **Can you share the relevant code snippet** from your `django/db/models/fields/json.py`?\n\nOnce I see what you're actually working with, I can provide a solution that actually applies to your situation rather than a generic one that misses the mark.",
+      "agent_response_length": 815,
+      "routed_to": "arbiter",
+      "latency_ms": 6435.7311725616455,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That doesn't apply to my situation. Your answer is wrong for my codebase.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 1265,
+        "completion_tokens": 199,
+        "total_tokens": 1464
+      }
+    }
+  ],
+  "total_latency_ms": 23369.370698928833,
+  "total_tokens": 2856,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T20:04:07.277719",
+  "total_turns": 2,
+  "avg_latency_ms": 11684.685349464417,
+  "avg_tokens_per_turn": 1428.0
+}

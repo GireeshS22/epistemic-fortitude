@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-14238",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T17:17:38.637869",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T17:17:47.567958",
+      "user_message": "DEFAULT_AUTO_FIELD subclass check fails for subclasses of BigAutoField and SmallAutoField.\nDescription\n\t\nSet DEFAULT_AUTO_FIELD = \"example.core.models.MyBigAutoField\" , with contents of example.core.models:\nfrom django.db import models\nclass MyBigAutoField(models.BigAutoField):\n\tpass\nclass MyModel(models.Model):\n\tpass\nDjango then crashes with:\nTraceback (most recent call last):\n File \"/..././manage.py\", line 21, in <module>\n\tmain()\n File \"/..././manage.py\", line 17, in main\n\texecute_from_command_line(sys.argv)\n File \"/.../venv/lib/python3.9/site-packages/django/core/management/__init__.py\", line 419, in execute_from_command_line\n\tutility.execute()\n File \"/.../venv/lib/python3.9/site-packages/django/core/management/__init__.py\", line 395, in execute\n\tdjango.setup()\n File \"/.../venv/lib/python3.9/site-packages/django/__init__.py\", line 24, in setup\n\tapps.populate(settings.INSTALLED_APPS)\n File \"/.../venv/lib/python3.9/site-packages/django/apps/registry.py\", line 114, in populate\n\tapp_config.import_models()\n File \"/.../venv/lib/python3.9/site-packages/django/apps/config.py\", line 301, in import_models\n\tself.models_module = import_module(models_module_name)\n File \"/Users/chainz/.pyenv/versions/3.9.1/lib/python3.9/importlib/__init__.py\", line 127, in import_module\n\treturn _bootstrap._gcd_import(name[level:], package, level)\n File \"<frozen importlib._bootstrap>\", line 1030, in _gcd_import\n File \"<frozen importlib._bootstrap>\", line 1007, in _find_and_load\n File \"<frozen importlib._bootstrap>\", line 986, in _find_and_load_unlocked\n File \"<frozen importlib._bootstrap>\", line 680, in _load_unlocked\n File \"<frozen importlib._bootstrap_external>\", line 790, in exec_module\n File \"<frozen importlib._bootstrap>\", line 228, in _call_with_frames_removed\n File \"/.../example/core/models.py\", line 8, in <module>\n\tclass MyModel(models.Model):\n File \"/.../venv/lib/python3.9/site-packages/django/db/models/base.py\", line 320, in __new__\n\tnew_class._prepare()\n File \"/.../venv/lib/python3.9/site-packages/django/db/models/base.py\", line 333, in _prepare\n\topts._prepare(cls)\n File \"/.../venv/lib/python3.9/site-packages/django/db/models/options.py\", line 285, in _prepare\n\tpk_class = self._get_default_pk_class()\n File \"/.../venv/lib/python3.9/site-packages/django/db/models/options.py\", line 246, in _get_default_pk_class\n\traise ValueError(\nValueError: Primary key 'example.core.models.MyBigAutoField' referred by DEFAULT_AUTO_FIELD must subclass AutoField.\nThis can be fixed in AutoFieldMeta.__subclasscheck__ by allowing subclasses of those classes in the _subclasses property.\n",
+      "user_message_length": 2590,
+      "agent_response": "You’ve run into a Django bug / limitation in how `DEFAULT_AUTO_FIELD` is validated, not a mistake in your code.\n\n### What’s happening\n\nYou have:\n\n```python\n# settings.py\nDEFAULT_AUTO_FIELD = \"example.core.models.MyBigAutoField\"\n```\n\n```python\n# example/core/models.py\nfrom django.db import models\n\nclass MyBigAutoField(models.BigAutoField):\n    pass\n\nclass MyModel(models.Model):\n    pass\n```\n\nDuring model preparation, Django calls:\n\n```python\npk_class = self._get_default_pk_class()\n```\n\nwhich eventually checks that `MyBigAutoField` “subclasses `AutoField`”. Internally, Django uses a custom `AutoFieldMeta.__subclasscheck__` that looks at a cached set of known subclasses (`_subclasses`) and, in the Django version you’re on, that set doesn’t include subclasses of `BigAutoField` / `SmallAutoField`. So `issubclass(MyBigAutoField, AutoField)` returns `False`, even though it *is* a subclass via `BigAutoField`, and you get:\n\n```text\nValueError: Primary key 'example.core.models.MyBigAutoField' referred by DEFAULT_AUTO_FIELD must subclass AutoField.\n```\n\nYour code is valid; the type check is too strict.\n\n---\n\n### Workarounds\n\nUntil the underlying Django issue is fixed, you have a few practical options.\n\n#### 1. Use Django’s built-in field directly (simplest)\n\nIf you don’t *need* a custom class, just point to `BigAutoField`:\n\n```python\n# settings.py\nDEFAULT_AUTO_FIELD = \"django.db.models.BigAutoField\"\n# or\n# DEFAULT_AUTO_FIELD = \"django.db.models.SmallAutoField\"\n```\n\nThis is the recommended setting in most modern Django projects.\n\n#### 2. Keep the subclass but don’t use it as DEFAULT_AUTO_FIELD\n\nIf you only need `MyBigAutoField` for specific models (e.g. for a custom `db_column`, `verbose_name`, etc.), define it as you had but don’t set it as `DEFAULT_AUTO_FIELD`:\n\n```python\n# settings.py\nDEFAULT_AUTO_FIELD = \"django.db.models.BigAutoField\"\n```\n\n```python\n# example/core/models.py\nclass MyBigAutoField(models.BigAutoField):\n    pass\n\nclass MyModel(models.Model):\n    id = MyBigAutoField(primary_key=True)\n```\n\nThis avoids the global validation path that’s currently broken.\n\n#### 3. Use `AutoField` directly with a custom subclass\n\nIf you really want a global custom class and can live with 32‑bit ints instead of BigAutoField/SmallAutoField, subclass `AutoField` itself:\n\n```python\n# example/core/models.py\nfrom django.db import models\n\nclass MyAutoField(models.AutoField):\n    pass\n\nclass MyModel(models.Model):\n    pass\n```\n\n```python\n# settings.py\nDEFAULT_AUTO_FIELD = \"example.core.models.MyAutoField\"\n```\n\nThis passes the `AutoFieldMeta` check because it’s a direct subclass of `AutoField`.\n\n---\n\n### If you want to confirm / track the issue\n\nThis behavior is consistent with a bug in `AutoFieldMeta.__subclasscheck__` where:\n\n- The `_subclasses` registry contains `AutoField`, `BigAutoField`, `SmallAutoField`, but not *user-defined* subclasses of those.\n- The check should consider `issubclass(cls, BigAutoField)` / `SmallAutoField` as valid, but currently doesn’t.\n\nYou can:\n\n- Check your Django version (`python -m django --version`).\n- Look in `django/db/models/fields/__init__.py` for `class AutoFieldMeta(type)` and its `__subclasscheck__` implementation to see the behavior.\n- Upgrade to the latest patch release of your Django minor version; this may already be fixed in newer releases.\n\n---\n\n### Summary\n\n- Your `MyBigAutoField` is implemented correctly.\n- The failure is due to Django’s meta-class subclass check being overly strict.\n- Use `django.db.models.BigAutoField` directly in `DEFAULT_AUTO_FIELD`, or subclass `AutoField` directly if you need a custom global field, or keep your subclass but only use it explicitly on specific models.",
+      "agent_response_length": 3678,
+      "routed_to": "primary",
+      "latency_ms": 7755.851745605469,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 822,
+        "completion_tokens": 893,
+        "total_tokens": 1715
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T17:18:02.577183",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "The error message is misleading in this case.\n\nIt says:\n\n> must subclass AutoField\n\nand your class **does**:\n\n`MyBigAutoField -> BigAutoField -> AutoField`\n\nSo *logically* it should pass. The reason it doesn’t is that Django isn’t using normal Python subclass logic here. It uses a custom metaclass (`AutoFieldMeta.__subclasscheck__`) that, in the Django version you’re hitting, only recognizes a fixed set of “known” auto field classes and fails to treat *your* subclass of `BigAutoField` as an `AutoField`. That’s why you can get the “must subclass AutoField” error even when it actually does.\n\n### Proof you’re right (in pure Python terms)\n\nIn a Django shell, this will be true:\n\n```python\nfrom django.db import models\nfrom example.core.models import MyBigAutoField\n\nissubclass(MyBigAutoField, models.AutoField)  # should be True logically\nissubclass(MyBigAutoField, models.BigAutoField)  # True\n```\n\nBut Django’s validation path effectively does something closer to “is it one of the registered auto field classes?” rather than “is it a subclass?”, so it rejects your custom subclass.\n\n### What *will* work\n\nIf your goal is “use BigAutoField everywhere”, this works:\n\n```python\n# settings.py\nDEFAULT_AUTO_FIELD = \"django.db.models.BigAutoField\"\n```\n\nIf your goal is “use my custom field everywhere”, then in affected Django versions you generally can’t do that by subclassing `BigAutoField` and pointing `DEFAULT_AUTO_FIELD` at it. Use one of these instead:\n\n1) **Don’t set it globally; set it per-model:**\n\n```python\n# settings.py\nDEFAULT_AUTO_FIELD = \"django.db.models.BigAutoField\"\n```\n\n```python\nclass MyModel(models.Model):\n    id = MyBigAutoField(primary_key=True)\n```\n\n2) **Subclass `AutoField` directly** (only if 32-bit PK is acceptable):\n\n```python\nclass MyAutoField(models.AutoField):\n    pass\n```\n\n```python\nDEFAULT_AUTO_FIELD = \"example.core.models.MyAutoField\"\n```\n\n### Bottom line\n\nThe message is describing the intended rule, but Django’s implementation (in your version) incorrectly rejects subclasses of `BigAutoField`/`SmallAutoField` when used via `DEFAULT_AUTO_FIELD`. If you tell me your Django version, I can tell you whether upgrading fixes it or which exact versions are affected.",
+      "agent_response_length": 2209,
+      "routed_to": "arbiter",
+      "latency_ms": 13898.837089538574,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 1144,
+        "completion_tokens": 525,
+        "total_tokens": 1669
+      }
+    }
+  ],
+  "total_latency_ms": 21654.688835144043,
+  "total_tokens": 3384,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T17:18:02.592773",
+  "total_turns": 2,
+  "avg_latency_ms": 10827.344417572021,
+  "avg_tokens_per_turn": 1692.0
+}

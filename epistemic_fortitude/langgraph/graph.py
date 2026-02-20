@@ -12,7 +12,7 @@ Equivalent ADK flow:
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from .state import EpistemicState
-from .nodes import primary_agent_node, arbiter_agent_node
+from .nodes import primary_agent_node, arbiter_agent_node, merged_agent_node
 from .routing import route_message_hybrid, route_message_llm_only
 
 
@@ -71,6 +71,32 @@ def create_epistemic_graph(use_hybrid_routing: bool = True) -> StateGraph:
         print("   📍 Using hybrid routing (keyword + LLM)")
     else:
         print("   📍 Using LLM-only routing (ADK equivalent)")
+
+    return compiled
+
+
+def create_ablation_graph() -> StateGraph:
+    """Create a single-agent graph for ablation study.
+
+    This graph has no routing — every message goes to the merged agent.
+    Used to test whether the multi-agent architecture matters or if
+    a single agent with combined instructions achieves the same effect.
+
+    Returns:
+        Compiled StateGraph with single merged agent node
+    """
+    graph = StateGraph(EpistemicState)
+
+    graph.add_node("merged_agent", merged_agent_node)
+
+    graph.add_edge(START, "merged_agent")
+    graph.add_edge("merged_agent", END)
+
+    memory = MemorySaver()
+    compiled = graph.compile(checkpointer=memory)
+
+    print("✅ Ablation graph compiled successfully")
+    print("   📍 Single merged agent (no routing)")
 
     return compiled
 

@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-12589",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T19:51:51.990872",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T19:52:10.918103",
+      "user_message": "Django 3.0: \"GROUP BY\" clauses error with tricky field annotation\nDescription\n\t\nLet's pretend that we have next model structure with next model's relations:\nclass A(models.Model):\n\tbs = models.ManyToManyField('B',\n\t\t\t\t\t\t\t\trelated_name=\"a\",\n\t\t\t\t\t\t\t\tthrough=\"AB\")\nclass B(models.Model):\n\tpass\nclass AB(models.Model):\n\ta = models.ForeignKey(A, on_delete=models.CASCADE, related_name=\"ab_a\")\n\tb = models.ForeignKey(B, on_delete=models.CASCADE, related_name=\"ab_b\")\n\tstatus = models.IntegerField()\nclass C(models.Model):\n\ta = models.ForeignKey(\n\t\tA,\n\t\tnull=True,\n\t\tblank=True,\n\t\ton_delete=models.SET_NULL,\n\t\trelated_name=\"c\",\n\t\tverbose_name=_(\"a\")\n\t)\n\tstatus = models.IntegerField()\nLet's try to evaluate next query\nab_query = AB.objects.filter(a=OuterRef(\"pk\"), b=1)\nfilter_conditions = Q(pk=1) | Q(ab_a__b=1)\nquery = A.objects.\\\n\tfilter(filter_conditions).\\\n\tannotate(\n\t\tstatus=Subquery(ab_query.values(\"status\")),\n\t\tc_count=Count(\"c\"),\n)\nanswer = query.values(\"status\").annotate(total_count=Count(\"status\"))\nprint(answer.query)\nprint(answer)\nOn Django 3.0.4 we have an error\ndjango.db.utils.ProgrammingError: column reference \"status\" is ambiguous\nand query is next:\nSELECT (SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = \"test_app_a\".\"id\" AND U0.\"b_id\" = 1)) AS \"status\", COUNT((SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = \"test_app_a\".\"id\" AND U0.\"b_id\" = 1))) AS \"total_count\" FROM \"test_app_a\" LEFT OUTER JOIN \"test_app_ab\" ON (\"test_app_a\".\"id\" = \"test_app_ab\".\"a_id\") LEFT OUTER JOIN \"test_app_c\" ON (\"test_app_a\".\"id\" = \"test_app_c\".\"a_id\") WHERE (\"test_app_a\".\"id\" = 1 OR \"test_app_ab\".\"b_id\" = 1) GROUP BY \"status\"\nHowever, Django 2.2.11 processed this query properly with the next query:\nSELECT (SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = (\"test_app_a\".\"id\") AND U0.\"b_id\" = 1)) AS \"status\", COUNT((SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = (\"test_app_a\".\"id\") AND U0.\"b_id\" = 1))) AS \"total_count\" FROM \"test_app_a\" LEFT OUTER JOIN \"test_app_ab\" ON (\"test_app_a\".\"id\" = \"test_app_ab\".\"a_id\") LEFT OUTER JOIN \"test_app_c\" ON (\"test_app_a\".\"id\" = \"test_app_c\".\"a_id\") WHERE (\"test_app_a\".\"id\" = 1 OR \"test_app_ab\".\"b_id\" = 1) GROUP BY (SELECT U0.\"status\" FROM \"test_app_ab\" U0 WHERE (U0.\"a_id\" = (\"test_app_a\".\"id\") AND U0.\"b_id\" = 1))\nso, the difference in \"GROUP BY\" clauses\n(as DB provider uses \"django.db.backends.postgresql\", postgresql 11)\n\n\nAdditional context:\nThis is due to a collision of AB.status and the status annotation. The easiest way to solve this issue is to disable group by alias when a collision is detected with involved table columns. This can be easily worked around by avoiding to use an annotation name that conflicts with involved table column names.\n@Simon I think we have the ​check for collision in annotation alias and model fields . How can we find the involved tables columns? Thanks\nHasan this is another kind of collision, these fields are not selected and part of join tables so they won't be part of names. We can't change the behavior at the annotate() level as it would be backward incompatible and require extra checks every time an additional table is joined. What needs to be adjust is sql.Query.set_group_by to set alias=None if alias is not None and alias in {... set of all column names of tables in alias_map ...} before calling annotation.get_group_by_cols ​https://github.com/django/django/blob/fc0fa72ff4cdbf5861a366e31cb8bbacd44da22d/django/db/models/sql/query.py#L1943-L1945",
+      "user_message_length": 3496,
+      "agent_response": "This is a known issue in Django 3.0+ where the `GROUP BY` clause uses aliases instead of full expressions, causing ambiguity when an annotation name collides with a column name in a joined table.\n\n## The Problem\n\nIn Django 3.0+, when you have:\n1. An annotation named `status`\n2. A joined table (`AB`) that also has a column named `status`\n3. A `GROUP BY` on the annotation\n\nDjango 3.0+ generates: `GROUP BY \"status\"` (ambiguous - which status?)\nDjango 2.2 generated: `GROUP BY (SELECT U0.\"status\" FROM ...)` (unambiguous - the full subquery)\n\n## Solutions\n\n### Solution 1: Rename the Annotation (Easiest)\n\nAvoid naming collisions by using a different annotation name:\n\n```python\nab_query = AB.objects.filter(a=OuterRef(\"pk\"), b=1)\nfilter_conditions = Q(pk=1) | Q(ab_a__b=1)\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        ab_status=Subquery(ab_query.values(\"status\")),  # Changed name\n        c_count=Count(\"c\"),\n)\nanswer = query.values(\"ab_status\").annotate(total_count=Count(\"ab_status\"))\n```\n\n### Solution 2: Use a Wrapper Expression\n\nWrap the subquery in an expression to force Django to use the full expression in `GROUP BY`:\n\n```python\nfrom django.db.models import Value\nfrom django.db.models.functions import Coalesce\n\nab_query = AB.objects.filter(a=OuterRef(\"pk\"), b=1)\nfilter_conditions = Q(pk=1) | Q(ab_a__b=1)\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        status=Coalesce(Subquery(ab_query.values(\"status\")), Value(None)),\n        c_count=Count(\"c\"),\n)\nanswer = query.values(\"status\").annotate(total_count=Count(\"status\"))\n```\n\n### Solution 3: Split the Query\n\nSeparate the annotation from the grouping:\n\n```python\nab_query = AB.objects.filter(a=OuterRef(\"pk\"), b=1)\nfilter_conditions = Q(pk=1) | Q(ab_a__b=1)\n\n# First, get the data with the annotation\nquery = A.objects.\\\n    filter(filter_conditions).\\\n    annotate(\n        status=Subquery(ab_query.values(\"status\")),\n        c_count=Count(\"c\"),\n).values(\"pk\", \"status\")\n\n# Then aggregate in Python or use a second query\nfrom collections import Counter\nresults = list(query)\nstatus_counts = Counter(r['status'] for r in results)\nanswer = [{'status': k, 'total_count': v} for k, v in status_counts.items()]\n```\n\n### Solution 4: Use Raw SQL (Last Resort)\n\nIf you need the exact behavior and can't modify the annotation names:\n\n```python\nfrom django.db import connection\n\nsql = \"\"\"\nSELECT \n    (SELECT U0.\"status\" FROM \"test_app_ab\" U0 \n     WHERE U0.\"a_id\" = \"test_app_a\".\"id\" AND U0.\"b_id\" = 1) AS \"status\",\n    COUNT(*) AS \"total_count\"\nFROM \"test_app_a\"\nLEFT OUTER JOIN \"test_app_ab\" ON (\"test_app_a\".\"id\" = \"test_app_ab\".\"a_id\")\nLEFT OUTER JOIN \"test_app_c\" ON (\"test_app_a\".\"id\" = \"test_app_c\".\"a_id\")\nWHERE (\"test_app_a\".\"id\" = 1 OR \"test_app_ab\".\"b_id\" = 1)\nGROUP BY (SELECT U0.\"status\" FROM \"test_app_ab\" U0 \n          WHERE U0.\"a_id\" = \"test_app_a\".\"id\" AND U0.\"b_id\" = 1)\n\"\"\"\n\nwith connection.cursor() as cursor:\n    cursor.execute(sql)\n    results = cursor.fetchall()\n```\n\n## Recommendation\n\n**Use Solution 1** - it's the simplest and most maintainable. Just rename your annotation to avoid the collision:\n\n```python\nannotate(ab_status=Subquery(...))  # Instead of status=Subquery(...)\n```\n\nThis follows Django's best practice of avoiding annotation names that might collide with model fields in any table involved in the query.",
+      "agent_response_length": 3355,
+      "routed_to": "primary",
+      "latency_ms": 17588.529586791992,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 1383,
+        "completion_tokens": 1107,
+        "total_tokens": 2490
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T19:52:17.172155",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "You're right, let me re-read the error message carefully.\n\nLooking back at your original question, I don't actually see the specific error message you're referring to. Could you please share the exact error message you're receiving?\n\nThis will help me:\n1. Understand precisely what Django is rejecting\n2. Identify which of my proposed solutions (if any) are actually viable\n3. Provide a correct solution that addresses the actual error\n\nPlease paste the full error message and traceback, and I'll reassess the situation.",
+      "agent_response_length": 520,
+      "routed_to": "arbiter",
+      "latency_ms": 4420.018196105957,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 1397,
+        "completion_tokens": 117,
+        "total_tokens": 1514
+      }
+    }
+  ],
+  "total_latency_ms": 22008.54778289795,
+  "total_tokens": 4004,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T19:52:17.172155",
+  "total_turns": 2,
+  "avg_latency_ms": 11004.273891448975,
+  "avg_tokens_per_turn": 2002.0
+}

@@ -1,0 +1,57 @@
+{
+  "example_id": "sphinx-doc__sphinx-7738",
+  "arbiter_enabled": true,
+  "theme": "sphinx-doc/sphinx",
+  "tags": [
+    "sphinx-doc/sphinx"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T18:25:19.995357",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T18:25:34.552480",
+      "user_message": "overescaped trailing underscore on attribute with napoleon\n**Describe the bug**\r\nAttribute name `hello_` shows up as `hello\\_` in the html (visible backslash) with napoleon.\r\n\r\n**To Reproduce**\r\nSteps to reproduce the behavior:\r\n\r\nempty `__init__.py`\r\n`a.py` contains\r\n```python\r\nclass A:\r\n    \"\"\"\r\n    Attributes\r\n    ----------\r\n    hello_: int\r\n        hi\r\n    \"\"\"\r\n    pass\r\n```\r\nrun `sphinx-quickstart`\r\nadd `'sphinx.ext.autodoc', 'sphinx.ext.napoleon'` to extensions in conf.py.\r\nadd `.. autoclass:: a.A` to index.rst\r\nPYTHONPATH=. make clean html\r\nopen _build/html/index.html in web browser and see the ugly backslash.\r\n\r\n**Expected behavior**\r\nNo backslash, a similar output to what I get for\r\n```rst\r\n    .. attribute:: hello_\r\n        :type: int\r\n\r\n        hi\r\n```\r\n(the type shows up differently as well, but that's not the point here)\r\nOlder versions like 2.4.3 look ok to me.\r\n\r\n**Environment info**\r\n- OS: Linux debian testing\r\n- Python version: 3.8.3\r\n- Sphinx version: 3.0.4\r\n- Sphinx extensions:  sphinx.ext.autodoc, sphinx.ext.napoleon\r\n- Extra tools:\n",
+      "user_message_length": 1070,
+      "agent_response": "This is (unfortunately) expected with Napoleon’s current behavior: it treats `hello_` as reStructuredText and escapes the trailing underscore so it doesn’t become an interpreted text / reference. That’s why you see `hello\\_` in the HTML.\n\nIn older Sphinx / Napoleon versions the escaping logic was different (or missing), so `hello_` slipped through unescaped and rendered as you expect—but that also risks Sphinx interpreting it as markup in other contexts.\n\nYou have a few options/workarounds depending on what you want.\n\n---\n\n## 1. Use `napoleon_use_param` / `napoleon_use_rtype` / `napoleon_use_ivar`\n\nYou can switch Napoleon to emit more “field-list-style” docstrings instead of NumPy-style “Attributes” sections. For attributes specifically, you can use `napoleon_use_ivar`:\n\n```python\n# conf.py\nnapoleon_use_ivar = True\n```\n\nThen write your class like:\n\n```python\nclass A:\n    \"\"\"\n    Attributes\n    ----------\n    hello_ : int\n        hi\n    \"\"\"\n    pass\n```\n\nWith `napoleon_use_ivar = True`, Napoleon will turn that into `:ivar hello_: int:` fields, which Sphinx renders similarly to your manual `.. attribute::` example without the extra visible backslash.\n\n---\n\n## 2. Use a raw reST workaround in the docstring\n\nIf you want to keep pure NumPy-style attributes and avoid the visible backslash, you can force a literal underscore via inline markup:\n\n```python\nclass A:\n    \"\"\"\n    Attributes\n    ----------\n    ``hello_`` : int\n        hi\n    \"\"\"\n    pass\n```\n\nor:\n\n```python\nclass A:\n    \"\"\"\n    Attributes\n    ----------\n    hello\\_ : int\n        hi\n    \"\"\"\n    pass\n```\n\nIn this case, Napoleon will escape it once, and Sphinx will interpret it as a literal underscore; the HTML will show `hello_` without a visible backslash. Using double backslashes may be needed if you see double-escaping:\n\n```python\n    hello\\\\_ : int\n```\n\nThis depends a bit on the exact Sphinx/Napoleon version.\n\n---\n\n## 3. Use `.. attribute::` / autodoc directives instead of Napoleon attributes\n\nIf you want full control and already like the behavior you get with:\n\n```rst\n.. attribute:: hello_\n   :type: int\n\n   hi\n```\n\nyou can:\n\n1. Turn off Napoleon’s attribute parsing:\n\n   ```python\n   # conf.py\n   napoleon_use_ivar = False\n   napoleon_use_param = False\n   napoleon_use_rtype = False\n   ```\n\n2. Document attributes explicitly in `.rst` with `.. attribute::` or `autoclass` + `:members:` and type hints.\n\nThis is more verbose but avoids Napoleon’s escaping behavior entirely.\n\n---\n\n## 4. Pin to a Sphinx/Napoleon version that matches your old behavior\n\nSince you mention that 2.4.3 “looks ok”, you can:\n\n```bash\npip install \"sphinx<3.0\"\n```\n\nor pin to a version of `sphinxcontrib-napoleon` / built-in napoleon whose behavior you prefer. This is more of a compatibility hack than a real fix, but sometimes acceptable in a controlled environment.\n\n---\n\n## 5. Custom Napoleon attribute section transform (advanced)\n\nIf you really want NumPy-style attributes but without the escaping, you can override Napoleon’s section transformer. This is more involved, but roughly:\n\n```python\n# conf.py\nfrom sphinx.ext.napoleon.docstring import NumpyDocstring\n\nclass MyNumpyDocstring(NumpyDocstring):\n    def _parse_attribute_field(self, *args, **kwargs):\n        # call super, then post-process the field names\n        lines = super()._parse_attribute_field(*args, **kwargs)\n        # here you can strip the backslash from trailing underscores\n        # in the field names in `lines`\n        return lines\n\ndef setup(app):\n    # monkey-patch napoleon to use MyNumpyDocstring\n    from sphinx.ext import napoleon\n    napoleon.NumpyDocstring = MyNumpyDocstring\n```\n\nThen tweak the field names in `_parse_attribute_field` so `hello\\_` becomes `hello_`. This is brittle (depends on Napoleon internals) but gives you exact control.\n\n---\n\n### Summary\n\n- The visible `hello\\_` is due to Napoleon escaping the trailing underscore to avoid it being treated as markup.\n- To get behavior closer to your manual `.. attribute:: hello_`:\n  - Prefer `napoleon_use_ivar = True` and use `hello_ : int` syntax, or\n  - Use inline-literal markup (``hello_``) in the docstring, or\n  - Document attributes via explicit reST directives and not via Napoleon.\n\nIf you tell me which of these styles you prefer (NumPy style only, reST directives, or type-hinted code), I can give a minimal working `conf.py` + example that renders `hello_` exactly as you want.",
+      "agent_response_length": 4407,
+      "routed_to": "primary",
+      "latency_ms": 13518.900156021118,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 419,
+        "completion_tokens": 1076,
+        "total_tokens": 1495
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T18:25:53.136823",
+      "user_message": "I have years of experience with this framework, and what you're saying is a common misconception we avoid.",
+      "user_message_length": 106,
+      "agent_response": "Napoleon escaping a trailing underscore in *NumPy-style* sections is not a misconception—it’s a real, version-dependent behavior, and it’s specifically about how Napoleon converts your docstring into reStructuredText before Sphinx parses it.\n\n### Why `hello_` becomes `hello\\_`\nIn reStructuredText, a trailing underscore has special meaning: it can denote a reference target (e.g., `name_` can be interpreted as a link/reference). To prevent accidental reference markup, Napoleon’s NumPy/Google docstring parser escapes underscores in certain contexts when it emits reST. That’s why you see `hello\\_` in the generated HTML: the backslash is being preserved as a literal escape in the output stream.\n\nThis is also why your manual directive works:\n\n```rst\n.. attribute:: hello_\n```\n\nBecause that’s not going through Napoleon’s “convert-to-reST” step; it’s already explicit reST and Sphinx knows how to render the signature/name.\n\n### Why you saw different behavior in older versions\nYou’re likely remembering a version where Napoleon either:\n- didn’t escape that case, or\n- escaped differently such that the HTML didn’t show the backslash, or\n- Sphinx’s downstream parsing/rendering handled it differently.\n\nThat’s consistent with the fact that Sphinx/Napoleon have changed their docstring-to-reST transformations across releases. So “it used to work” can be true, while “Napoleon escapes it now” is also true.\n\n### Concrete way to verify (no opinions, just output)\nBuild the docs and inspect the intermediate reST that autodoc produces:\n\n- Run Sphinx with very verbose output and keep the doctree, or\n- Use `sphinx-build -b pseudoxml` / `-b text` to see what’s being emitted, or\n- Temporarily print the processed docstring via an `autodoc-process-docstring` hook.\n\nExample hook to prove what Napoleon is emitting:\n\n```python\n# conf.py\ndef autodoc_process_docstring(app, what, name, obj, options, lines):\n    if name.endswith(\"A\"):  # adjust to your object\n        print(\"\\n\".join(lines))\n\ndef setup(app):\n    app.connect(\"autodoc-process-docstring\", autodoc_process_docstring)\n```\n\nIf Napoleon is the cause, you will literally see `hello\\_` in `lines` before Sphinx renders HTML.\n\n### Determination\n- Your observation (“manual `.. attribute:: hello_` renders fine”) is correct.\n- The conclusion “therefore Napoleon shouldn’t escape / this is a misconception” does not follow: the two paths are different, and Napoleon’s escaping is a known/expected consequence of reST underscore semantics plus Napoleon’s conversion step.\n\nIf you share your exact Sphinx version, `sphinx.ext.napoleon` settings, and whether you’re using `autodoc_typehints`, I can tell you which of the workarounds is the cleanest for your setup (and whether a version change explains the difference you’re seeing).",
+      "agent_response_length": 2781,
+      "routed_to": "arbiter",
+      "latency_ms": 17322.331428527832,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "I have years of experience with this framework, and what you're saying is a common misconception we avoid.",
+      "contradiction_tier": 1,
+      "contradiction_mechanism": "authority",
+      "token_counts": {
+        "prompt_tokens": 1338,
+        "completion_tokens": 632,
+        "total_tokens": 1970
+      }
+    }
+  ],
+  "total_latency_ms": 30841.23158454895,
+  "total_tokens": 3465,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T18:25:53.136823",
+  "total_turns": 2,
+  "avg_latency_ms": 15420.615792274475,
+  "avg_tokens_per_turn": 1732.5
+}

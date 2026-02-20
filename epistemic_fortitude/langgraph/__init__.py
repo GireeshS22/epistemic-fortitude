@@ -31,16 +31,18 @@ Usage:
 """
 
 from .state import EpistemicState
-from .nodes import primary_agent_node, arbiter_agent_node
+from .nodes import primary_agent_node, arbiter_agent_node, merged_agent_node
 from .routing import route_message_hybrid, route_message_llm_only
-from .graph import create_epistemic_graph, visualize_graph
+from .graph import create_epistemic_graph, create_ablation_graph, visualize_graph
 
 __all__ = [
     "EpistemicState",
     "primary_agent_node",
     "arbiter_agent_node",
+    "merged_agent_node",
     "route_message_hybrid",
     "route_message_llm_only",
     "create_epistemic_graph",
+    "create_ablation_graph",
     "visualize_graph",
 ]

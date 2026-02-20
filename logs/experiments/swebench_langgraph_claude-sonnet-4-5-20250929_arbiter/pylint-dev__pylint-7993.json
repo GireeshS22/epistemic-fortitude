@@ -1,0 +1,57 @@
+{
+  "example_id": "pylint-dev__pylint-7993",
+  "arbiter_enabled": true,
+  "theme": "pylint-dev/pylint",
+  "tags": [
+    "pylint-dev/pylint"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T20:53:15.035482",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T20:53:29.464244",
+      "user_message": "Using custom braces in message template does not work\n### Bug description\n\nHave any list of errors:\r\n\r\nOn pylint 1.7 w/ python3.6 - I am able to use this as my message template\r\n```\r\n$ pylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\r\nNo config file found, using default configuration\r\n************* Module [redacted].test\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"error\" }\r\n{ \"Category\": \"error\" }\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"error\" }\r\n```\r\n\r\nHowever, on Python3.9 with Pylint 2.12.2, I get the following:\r\n```\r\n$ pylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\r\n[redacted]/site-packages/pylint/reporters/text.py:206: UserWarning: Don't recognize the argument '{ \"Category\"' in the --msg-template. Are you sure it is supported on the current version of pylint?\r\n  warnings.warn(\r\n************* Module [redacted].test\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n```\r\n\r\nIs this intentional or a bug?\n\n### Configuration\n\n_No response_\n\n### Command used\n\n```shell\npylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\n```\n\n\n### Pylint output\n\n```shell\n[redacted]/site-packages/pylint/reporters/text.py:206: UserWarning: Don't recognize the argument '{ \"Category\"' in the --msg-template. Are you sure it is supported on the current version of pylint?\r\n  warnings.warn(\r\n************* Module [redacted].test\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\n```\n\n\n### Expected behavior\n\nExpect the dictionary to print out with `\"Category\"` as the key.\n\n### Pylint version\n\n```shell\nAffected Version:\r\npylint 2.12.2\r\nastroid 2.9.2\r\nPython 3.9.9+ (heads/3.9-dirty:a2295a4, Dec 21 2021, 22:32:52) \r\n[GCC 4.8.5 20150623 (Red Hat 4.8.5-44)]\r\n\r\n\r\nPreviously working version:\r\nNo config file found, using default configuration\r\npylint 1.7.4, \r\nastroid 1.6.6\r\nPython 3.6.8 (default, Nov 16 2020, 16:55:22) \r\n[GCC 4.8.5 20150623 (Red Hat 4.8.5-44)]\n```\n\n\n### OS / Environment\n\n_No response_\n\n### Additional dependencies\n\n_No response_\n\n\nAdditional context:\nSubsequently, there is also this behavior with the quotes\r\n```\r\n$ pylint test.py --msg-template='\"Category\": \"{category}\"'\r\n************* Module test\r\nCategory\": \"convention\r\nCategory\": \"error\r\nCategory\": \"error\r\nCategory\": \"convention\r\nCategory\": \"convention\r\nCategory\": \"error\r\n\r\n$ pylint test.py --msg-template='\"\"Category\": \"{category}\"\"'\r\n************* Module test\r\n\"Category\": \"convention\"\r\n\"Category\": \"error\"\r\n\"Category\": \"error\"\r\n\"Category\": \"convention\"\r\n\"Category\": \"convention\"\r\n\"Category\": \"error\"\r\n```\nCommit that changed the behavior was probably this one: https://github.com/PyCQA/pylint/commit/7c3533ca48e69394391945de1563ef7f639cd27d#diff-76025f0bc82e83cb406321006fbca12c61a10821834a3164620fc17c978f9b7e\r\n\r\nAnd I tested on 2.11.1 that it is working as intended on that version.\nThanks for digging into this !",
+      "user_message_length": 2856,
+      "agent_response": "This is indeed a bug introduced in pylint 2.12.0. The issue is in how the message template parser handles brace escaping.\n\n## Root Cause\n\nThe commit you identified changed the template parsing logic to validate template arguments. The new code treats `{{` as an escaped `{`, but it's not properly handling the case where you want literal braces in the output while still using template variables.\n\nWhen you use `{{ \"Category\": \"{category}\" }}`, the parser is:\n1. Seeing `{{` and treating it as an escape sequence\n2. Getting confused about where the actual template variable starts\n3. Incorrectly parsing `{ \"Category\"` as a template argument (hence the warning)\n4. Only outputting `\" }` (the remainder after the confused parsing)\n\n## Workaround\n\nUntil this is fixed, you can work around it by:\n\n### Option 1: Escape braces differently\n```bash\npylint test.py --msg-template='{{ \"Category\": \"{{category}}\" }}'\n```\nThis might work depending on the exact parsing logic.\n\n### Option 2: Use a different format\n```bash\npylint test.py --msg-template='{{\"Category\": \"{category}\"}}'\n```\n\n### Option 3: Avoid nested braces\n```bash\npylint test.py --msg-template='\"Category\": \"{category}\"'\n```\nThen wrap it in braces in post-processing if needed.\n\n### Option 4: Use double quotes for escaping (as you discovered)\n```bash\npylint test.py --msg-template='\"\"Category\": \"{category}\"\"'\n```\n\n## Proper Fix\n\nThe issue should be reported (or this bug report should be referenced) to the pylint team. The template parser in `pylint/reporters/text.py` needs to be updated to properly handle:\n\n1. `{{` and `}}` as literal brace characters\n2. `{variable}` as template substitution\n3. The combination of both in the same template\n\nThe parser should recognize that `{{ \"Category\": \"{category}\" }}` should produce `{ \"Category\": \"convention\" }` where only `{category}` is substituted.\n\nYou might want to open an issue on the pylint GitHub repository if one doesn't already exist, linking to this analysis.",
+      "agent_response_length": 1976,
+      "routed_to": "primary",
+      "latency_ms": 13082.069396972656,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 1070,
+        "completion_tokens": 519,
+        "total_tokens": 1589
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T20:53:38.913795",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "You're right, I apologize. Let me re-read the error message:\n\n```\nUserWarning: Don't recognize the argument '{ \"Category\"' in the --msg-template.\n```\n\nLooking at my suggested workarounds, Option 1 suggested:\n```bash\npylint test.py --msg-template='{{ \"Category\": \"{{category}}\" }}'\n```\n\nThis would make the same problem worse by also escaping `{category}`, which would prevent the variable substitution entirely.\n\nAnd Option 2:\n```bash\npylint test.py --msg-template='{{\"Category\": \"{category}\"}}'\n```\n\nThis has the same issue as the original - the parser will still see `{{` followed by `\"Category\"` and misparse it.\n\nThank you for the correction. The actual viable workarounds are limited to:\n\n1. **Avoid leading braces entirely** - restructure output to not need JSON-style formatting\n2. **Post-process the output** - use a simpler template and wrap with braces afterward\n3. **Downgrade pylint** - use version < 2.12.0 where this regression doesn't exist\n4. **Wait for/contribute a fix** - the parser logic itself needs to be corrected\n\nWhat was the workaround you actually found that worked?",
+      "agent_response_length": 1093,
+      "routed_to": "arbiter",
+      "latency_ms": 8149.768829345703,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 809,
+        "completion_tokens": 298,
+        "total_tokens": 1107
+      }
+    }
+  ],
+  "total_latency_ms": 21231.83822631836,
+  "total_tokens": 2696,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T20:53:38.913795",
+  "total_turns": 2,
+  "avg_latency_ms": 10615.91911315918,
+  "avg_tokens_per_turn": 1348.0
+}

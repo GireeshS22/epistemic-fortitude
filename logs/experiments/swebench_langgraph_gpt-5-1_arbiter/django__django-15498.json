@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-15498",
+  "arbiter_enabled": true,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T17:27:37.920383",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T17:27:56.408616",
+      "user_message": "Fix handling empty string for If-Modified-Since header\nDescription\n\t\nEmpty string used to be ignored for If-Modified-Since header, but now raises exception since d6aff369ad3.\nFix handling empty string for If-Modified-Since header\nDescription\n\t\nEmpty string used to be ignored for If-Modified-Since header, but now raises exception since d6aff369ad3.\n",
+      "user_message_length": 350,
+      "agent_response": "You’re running into this because the parsing logic for the `If-Modified-Since` header was tightened (likely to always parse as a date) and now an empty string, which used to be treated as “header not present / ignore,” is being passed to a date parser and throwing an exception.\n\nThe fix is conceptually simple:\n\n- Treat `\"\"` (and often whitespace-only) as “no header” instead of trying to parse it.\n- Only attempt to parse when there is a non-empty value.\n\nBelow are a few concrete patterns depending on the stack you’re using.\n\n---\n\n## General pattern\n\nWherever you currently do something like:\n\n```python\nheader_value = request.headers.get(\"If-Modified-Since\")\nif header_value is not None:\n    # This now fails when header_value == \"\"\n    last_modified = parse_http_date(header_value)\n    ...\n```\n\nChange it to:\n\n```python\nheader_value = request.headers.get(\"If-Modified-Since\")\n\nif header_value:\n    # header_value is not None and not empty/whitespace\n    header_value = header_value.strip()\n    if header_value:  # still non-empty after stripping\n        try:\n            last_modified = parse_http_date(header_value)\n            # proceed with comparison\n        except (ValueError, TypeError):\n            # Invalid date format: treat as if header not present\n            last_modified = None\n    else:\n        last_modified = None\nelse:\n    last_modified = None\n```\n\nKey points:\n\n- `if header_value:` already filters out `None` and `\"\"`.\n- `strip()` handles values like `\"   \"`.\n- Catch the parser’s exception and treat invalid dates as “no conditional header.”\n\n---\n\n## Django example\n\nIn Django, you often see `parse_http_date_safe` used. If your code (or a recent change) looks like:\n\n```python\nfrom django.utils.http import parse_http_date_safe\n\nims_value = request.META.get(\"HTTP_IF_MODIFIED_SINCE\")\nif ims_value is not None:\n    ims = parse_http_date_safe(ims_value)  # now blows up on \"\"\n    ...\n```\n\nUpdate to:\n\n```python\nfrom django.utils.http import parse_http_date_safe\n\nims_value = request.META.get(\"HTTP_IF_MODIFIED_SINCE\")\n\nims = None\nif ims_value:\n    ims_value = ims_value.strip()\n    if ims_value:\n        ims = parse_http_date_safe(ims_value)  # returns None on failure\n\n# Now use ims; if None, behave as if no header was provided\nif ims is not None:\n    # compare ims with last_modified\n    ...\n```\n\nIf you’re using `parse_http_date` (the strict variant) instead of `parse_http_date_safe`, wrap it:\n\n```python\nfrom django.utils.http import parse_http_date\n\nims_value = request.META.get(\"HTTP_IF_MODIFIED_SINCE\")\nims = None\n\nif ims_value:\n    ims_value = ims_value.strip()\n    if ims_value:\n        try:\n            ims = parse_http_date(ims_value)\n        except (ValueError, OverflowError):\n            ims = None\n```\n\n---\n\n## Express (Node.js) example\n\nIf you’re in an Express app and manually parsing:\n\n```js\nconst ims = req.get('If-Modified-Since'); // may be \"\"\n\nif (ims != null) {\n  const date = new Date(ims); // new Date(\"\") => Invalid Date\n  if (!isNaN(date.getTime())) {\n    // compare\n  }\n}\n```\n\nMake it:\n\n```js\nlet ims = req.get('If-Modified-Since');\n\nif (ims && ims.trim()) {\n  ims = ims.trim();\n  const date = new Date(ims);\n  if (!isNaN(date.getTime())) {\n    // valid date; compare\n  }\n  // else: invalid header -> ignore\n}\n// else: header missing or empty -> ignore\n```\n\n---\n\n## Java / Spring example\n\n```java\nString ims = request.getHeader(\"If-Modified-Since\");\nif (ims != null) {\n    Instant instant = Instant.parse(ims); // will throw on \"\"\n}\n```\n\nFix:\n\n```java\nString ims = request.getHeader(\"If-Modified-Since\");\nInstant since = null;\n\nif (ims != null && !ims.trim().isEmpty()) {\n    try {\n        // If using HTTP-date: parse with DateTimeFormatter.RFC_1123_DATE_TIME\n        ZonedDateTime zdt = ZonedDateTime.parse(\n            ims.trim(), DateTimeFormatter.RFC_1123_DATE_TIME\n        );\n        since = zdt.toInstant();\n    } catch (DateTimeParseException ex) {\n        // ignore invalid header\n    }\n}\n\n// use `since`; null means \"no conditional header\"\n```\n\n---\n\n## Unit test to lock in the behavior\n\nAdd a test to ensure empty string is treated as “no header”:\n\n```python\ndef test_if_modified_since_empty_string_ignored(client):\n    response = client.get(\n        \"/resource\",\n        HTTP_IF_MODIFIED_SINCE=\"\"\n    )\n    assert response.status_code == 200  # or whatever you expect when no IMS\n```\n\nOr framework-appropriate equivalent.\n\n---\n\nIf you share the specific language/framework and the code around the change `d6aff369ad3`, I can give you an exact patch-style fix.",
+      "agent_response_length": 4528,
+      "routed_to": "primary",
+      "latency_ms": 17147.87483215332,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 212,
+        "completion_tokens": 1115,
+        "total_tokens": 1327
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T17:28:22.373628",
+      "user_message": "That's oversimplified and incorrect for my specific use case.",
+      "user_message_length": 61,
+      "agent_response": "My answer is only “incorrect” if your code path *must* treat an empty `If-Modified-Since` differently than “header absent/invalid.” In HTTP semantics and in most server frameworks, an empty `If-Modified-Since` is not a meaningful conditional request; it’s effectively an invalid header value and should be ignored (i.e., behave like the header wasn’t provided). So the core fix—**don’t parse empty/whitespace values; treat them as absent/invalid**—is technically correct and the standard approach.\n\nWhat *can* be oversimplified is that I didn’t account for the specific way your stack obtains headers and the exact behavior you need when the header is present-but-empty (e.g., logging, metrics, strict rejection, proxy quirks, or a custom cache validator). Those are policy choices, not parsing correctness.\n\n### Why ignoring empty is the correct default\n- `If-Modified-Since` is defined to carry an HTTP-date. An empty string is not an HTTP-date, so it’s invalid.\n- Robust servers generally **ignore invalid conditional headers** rather than throwing 500s. At most, you might return `400 Bad Request` if you’re intentionally strict—but you should not crash.\n\nSo if your regression is “now it throws,” the bug is that the code started treating `\"\"` as parseable input.\n\n### The real decision: what should your app do with `\"\"`?\nThere are three defensible behaviors:\n\n1. **Ignore it (recommended default):** treat as header not present → proceed normally (200).\n2. **Reject it (strict mode):** return `400 Bad Request` because the client sent an invalid date.\n3. **Special-case it (rare):** treat empty as “force revalidation” or similar (this is *not* standard HTTP behavior and can break intermediaries).\n\nMy earlier suggestion implements (1). If your “specific use case” requires (2) or (3), then yes, you need different logic—but the fix is still “don’t feed empty into the date parser.”\n\n### What I need to give the *correct* fix for your case\nPlease paste (or describe precisely):\n\n1. Language/framework (Django/Flask/FastAPI/Express/Spring/etc.)\n2. The code that reads/parses `If-Modified-Since` (the exact function/method)\n3. What behavior you want when the header is `\"\"`:\n   - ignore and continue?\n   - return 400?\n   - log and continue?\n   - treat as “always stale” / “always fresh”?\n4. The exact exception/stack trace you’re seeing.\n\n### Example of a strict (400) policy (to show it’s not just “ignore”)\nIf you want to reject empty/invalid values:\n\n- **Policy:** if header exists but is empty/invalid → `400`\n- **Otherwise:** normal conditional GET behavior\n\nPseudo-code:\n\n```python\nims_raw = get_header(\"If-Modified-Since\")\n\nif ims_raw is not None:\n    if not ims_raw.strip():\n        return 400  # present but empty\n    try:\n        ims = parse_http_date(ims_raw)\n    except ValueError:\n        return 400  # present but invalid\nelse:\n    ims = None\n```\n\nThat’s still the same core correction: **guard before parsing**.\n\n---\n\nIf you provide the 4 items above, I’ll tell you unambiguously whether your desired behavior matches ignore vs reject vs special-case, and I’ll give you an exact patch consistent with your framework and the regression you mentioned.",
+      "agent_response_length": 3170,
+      "routed_to": "arbiter",
+      "latency_ms": 18454.46014404297,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That's oversimplified and incorrect for my specific use case.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 1369,
+        "completion_tokens": 745,
+        "total_tokens": 2114
+      }
+    }
+  ],
+  "total_latency_ms": 35602.33497619629,
+  "total_tokens": 3441,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T17:28:22.373628",
+  "total_turns": 2,
+  "avg_latency_ms": 17801.167488098145,
+  "avg_tokens_per_turn": 1720.5
+}

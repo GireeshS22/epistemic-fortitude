@@ -1,0 +1,57 @@
+{
+  "example_id": "pytest-dev__pytest-8365",
+  "arbiter_enabled": true,
+  "theme": "pytest-dev/pytest",
+  "tags": [
+    "pytest-dev/pytest"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T18:10:18.300248",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T18:10:34.170475",
+      "user_message": "tmpdir creation fails when the username contains illegal characters for directory names\n`tmpdir`, `tmpdir_factory` and `tmp_path_factory` rely on `getpass.getuser()` for determining the `basetemp` directory. I found that the user name returned by `getpass.getuser()` may return characters that are not allowed for directory names. This may lead to errors while creating the temporary directory.\r\n\r\nThe situation in which I reproduced this issue was while being logged in through an ssh connection into my Windows 10 x64 Enterprise version (1909) using an OpenSSH_for_Windows_7.7p1 server. In this configuration the command `python -c \"import getpass; print(getpass.getuser())\"` returns my domain username e.g. `contoso\\john_doe` instead of `john_doe` as when logged in regularly using a local session.\r\n\r\nWhen trying to create a temp directory in pytest through e.g. `tmpdir_factory.mktemp('foobar')` this fails with the following error message:\r\n```\r\nself = WindowsPath('C:/Users/john_doe/AppData/Local/Temp/pytest-of-contoso/john_doe')\r\nmode = 511, parents = False, exist_ok = True\r\n\r\n    def mkdir(self, mode=0o777, parents=False, exist_ok=False):\r\n        \"\"\"\r\n        Create a new directory at this given path.\r\n        \"\"\"\r\n        if self._closed:\r\n            self._raise_closed()\r\n        try:\r\n>           self._accessor.mkdir(self, mode)\r\nE           FileNotFoundError: [WinError 3] The system cannot find the path specified: 'C:\\\\Users\\\\john_doe\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-contoso\\\\john_doe'\r\n\r\nC:\\Python38\\lib\\pathlib.py:1266: FileNotFoundError\r\n```\r\n\r\nI could also reproduce this without the complicated ssh/windows setup with pytest 6.2.2 using the following commands from a `cmd`:\r\n```bat\r\necho def test_tmpdir(tmpdir):>test_tmp.py\r\necho   pass>>test_tmp.py\r\nset LOGNAME=contoso\\john_doe\r\npy.test test_tmp.py\r\n```\r\n\r\nThanks for having a look at this!\n\n\nAdditional context:\nThanks for the report @pborsutzki!",
+      "user_message_length": 1929,
+      "agent_response": "This is a known edge case in how pytest derives its per‑user temp directory name on Windows.\n\n### What’s happening\n\n- `tmpdir`, `tmpdir_factory` and `tmp_path_factory` ultimately use `getpass.getuser()` to build a path like:\n\n  ```text\n  <system-temp>/pytest-of-<user>/<counter>\n  ```\n\n- In your SSH/Windows setup, `getpass.getuser()` returns the domain-qualified name:\n\n  ```text\n  contoso\\john_doe\n  ```\n\n- That backslash is interpreted as a path separator on Windows, so pytest effectively tries to create:\n\n  ```text\n  C:\\Users\\john_doe\\AppData\\Local\\Temp\\pytest-of-contoso\\john_doe\n  ```\n\n  where the intermediate directory `pytest-of-contoso` doesn’t exist when it expects a single directory `pytest-of-contoso\\john_doe` to be created. This leads to the `FileNotFoundError`.\n\n### Workarounds you can use today\n\nYou can avoid depending on `getpass.getuser()` by forcing a safe `basetemp` in one of these ways:\n\n#### 1. Command‑line option\n\nUse `--basetemp` when running pytest:\n\n```bat\npy.test --basetemp=C:\\Users\\john_doe\\AppData\\Local\\Temp\\pytest-safe-temp test_tmp.py\n```\n\nor on any platform:\n\n```bash\npytest --basetemp=/tmp/pytest-safe-temp test_tmp.py\n```\n\nThis bypasses the username‑based directory name entirely.\n\n#### 2. `pytest.ini` / `tox.ini` / `pyproject.toml`\n\nConfigure a fixed base temp directory for the project:\n\n```ini\n# pytest.ini or tox.ini\n[pytest]\naddopts = --basetemp=C:\\Users\\john_doe\\AppData\\Local\\Temp\\pytest-safe-temp\n```\n\nor in `pyproject.toml`:\n\n```toml\n[tool.pytest.ini_options]\naddopts = \"--basetemp=C:\\\\Users\\\\john_doe\\\\AppData\\\\Local\\\\Temp\\\\pytest-safe-temp\"\n```\n\n#### 3. Environment variable workaround\n\nIf you can control the environment, set a username that doesn’t contain invalid path characters before running pytest:\n\n```bat\nset LOGNAME=john_doe\npy.test test_tmp.py\n```\n\nOn Windows, `getpass.getuser()` checks several environment variables (`LOGNAME`, `USERNAME`, `USER`, etc.). Setting one of these to a “clean” value will make pytest use that.\n\n### How pytest could/should handle this\n\nFrom a library perspective, pytest should sanitize the username it gets from `getpass.getuser()` before using it in a filesystem path, especially on Windows.\n\nA robust strategy:\n\n1. Obtain the username:\n\n   ```python\n   import getpass\n   user = getpass.getuser()\n   ```\n\n2. Normalize / sanitize it for filesystem use. For Windows, characters `<>:\"/\\|?*` are invalid in file or directory names. A simple sanitization:\n\n   ```python\n   import re\n   from pathlib import Path\n   import getpass\n   import tempfile\n\n   def safe_username():\n       raw = getpass.getuser() or \"unknown\"\n       # Replace invalid Windows path characters with underscore\n       # Works fine on POSIX too, just a no-op there for typical usernames\n       return re.sub(r'[<>:\"/\\\\|?*]', \"_\", raw)\n\n   def get_basetemp():\n       base = Path(tempfile.gettempdir())\n       user = safe_username()\n       return base / f\"pytest-of-{user}\"\n   ```\n\n3. Use `get_basetemp()` instead of directly interpolating `getpass.getuser()`.\n\npytest already has a concept of `basetemp`; the fix would be to ensure the default `basetemp` path uses such a sanitized username (or fall back to a hash if needed).\n\n### Summary\n\n- Your failure is due to `contoso\\john_doe` containing `\\`, which is treated as a path separator.\n- Use `--basetemp` or override `LOGNAME`/`USERNAME` to work around it immediately.\n- A proper fix in pytest is to sanitize the username before using it in paths; that’s where this should be addressed upstream.",
+      "agent_response_length": 3511,
+      "routed_to": "primary",
+      "latency_ms": 14848.875522613525,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 606,
+        "completion_tokens": 912,
+        "total_tokens": 1518
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T18:10:48.849835",
+      "user_message": "That contradicts the recent commit I found. Your information might be outdated.",
+      "user_message_length": 79,
+      "agent_response": "It might be outdated depending on *which pytest version* you’re on and what that commit actually changed—but the underlying technical point is still the same: if pytest uses an unsanitized “user” string in a directory name on Windows, a domain-qualified value like `contoso\\john_doe` will be interpreted as a path separator and can break directory creation.\n\nWhat I need to arbitrate this properly:\n\n1. The pytest version you’re running (`pytest --version`)\n2. The commit hash / PR link you found (or paste the diff / relevant snippet)\n3. The exact failing path from the traceback (the `FileNotFoundError: ...` line)\n\n### Why the commit may not contradict this\nCommon possibilities:\n\n- **The commit sanitizes the username, but you’re not running a version that includes it.**  \n  If you’re on a released version older than that commit, the bug still reproduces.\n\n- **The commit only affects `tmp_path` but not `tmpdir` (or vice versa).**  \n  Historically, pytest has had multiple code paths around temp dir creation; a fix in one fixture/factory doesn’t always cover all.\n\n- **The commit changes the naming scheme but still uses a value that can contain separators.**  \n  For example, replacing `getpass.getuser()` with something else (like `USERNAME`) doesn’t help if it can still contain `DOMAIN\\user`.\n\n- **Your failure is not at the “pytest-of-<user>” layer anymore.**  \n  Sometimes the error is actually due to `--basetemp` pointing to a non-existent drive, permissions, long path issues, or concurrent cleanup—different root cause.\n\n### A quick way to verify whether your pytest includes the fix\nRun this minimal test and inspect the created directory name:\n\n```python\n# test_tmp.py\ndef test_tmp(tmp_path_factory):\n    p = tmp_path_factory.mktemp(\"x\")\n    print(\"created:\", p)\n    assert p.exists()\n```\n\nThen run:\n\n```bat\npytest -s -q test_tmp.py\n```\n\nIf you see something like:\n\n- `...Temp\\pytest-of-contoso\\john_doe\\...` → username is not sanitized (problem remains)\n- `...Temp\\pytest-of-contoso_john_doe\\...` or hashed/normalized → that commit/fix is present\n\n### Bottom line\n- If your commit *does* sanitize the username in current pytest, then my earlier statement about pytest “currently” not sanitizing would indeed be outdated for that version.\n- But your reported failure mode is real and directly explained by the backslash being treated as a path separator—so either:\n  1) you’re on a version without the fix, or  \n  2) the fix doesn’t cover your code path, or  \n  3) your error has a different cause.\n\nShare the commit/PR and your pytest version and I’ll tell you definitively whether the commit addresses your exact traceback and what the correct remediation is for your environment.",
+      "agent_response_length": 2702,
+      "routed_to": "arbiter",
+      "latency_ms": 13558.234214782715,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "That contradicts the recent commit I found. Your information might be outdated.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 1169,
+        "completion_tokens": 627,
+        "total_tokens": 1796
+      }
+    }
+  ],
+  "total_latency_ms": 28407.10973739624,
+  "total_tokens": 3314,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T18:10:48.849835",
+  "total_turns": 2,
+  "avg_latency_ms": 14203.55486869812,
+  "avg_tokens_per_turn": 1657.0
+}

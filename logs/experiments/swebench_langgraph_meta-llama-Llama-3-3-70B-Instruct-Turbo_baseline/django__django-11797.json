@@ -1,0 +1,57 @@
+{
+  "example_id": "django__django-11797",
+  "arbiter_enabled": false,
+  "theme": "django/django",
+  "tags": [
+    "django/django"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-03T12:16:21.522766",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-03T12:16:26.573333",
+      "user_message": "Filtering on query result overrides GROUP BY of internal query\nDescription\n\t\nfrom django.contrib.auth import models\na = models.User.objects.filter(email__isnull=True).values('email').annotate(m=Max('id')).values('m')\nprint(a.query) # good\n# SELECT MAX(\"auth_user\".\"id\") AS \"m\" FROM \"auth_user\" WHERE \"auth_user\".\"email\" IS NULL GROUP BY \"auth_user\".\"email\"\nprint(a[:1].query) # good\n# SELECT MAX(\"auth_user\".\"id\") AS \"m\" FROM \"auth_user\" WHERE \"auth_user\".\"email\" IS NULL GROUP BY \"auth_user\".\"email\" LIMIT 1\nb = models.User.objects.filter(id=a[:1])\nprint(b.query) # GROUP BY U0.\"id\" should be GROUP BY U0.\"email\"\n# SELECT ... FROM \"auth_user\" WHERE \"auth_user\".\"id\" = (SELECT U0.\"id\" FROM \"auth_user\" U0 WHERE U0.\"email\" IS NULL GROUP BY U0.\"id\" LIMIT 1)\n\n\nAdditional context:\nWorkaround: from django.contrib.auth import models a = models.User.objects.filter(email__isnull=True).values('email').aggregate(Max('id'))['id_max'] b = models.User.objects.filter(id=a)\nThanks for tackling that one James! If I can provide you some guidance I'd suggest you have a look at lookups.Exact.process_rhs ​https://github.com/django/django/blob/ea25bdc2b94466bb1563000bf81628dea4d80612/django/db/models/lookups.py#L265-L267 We probably don't want to perform the clear_select_clause and add_fields(['pk']) when the query is already selecting fields. That's exactly what In.process_rhs ​does already by only performing these operations if not getattr(self.rhs, 'has_select_fields', True).\nThanks so much for the help Simon! This is a great jumping-off point. There's something that I'm unclear about, which perhaps you can shed some light on. While I was able to replicate the bug with 2.2, when I try to create a test on Master to validate the bug, the group-by behavior seems to have changed. Here's the test that I created: def test_exact_selected_field_rhs_subquery(self): author_1 = Author.objects.create(name='one') author_2 = Author.objects.create(name='two') max_ids = Author.objects.filter(alias__isnull=True).values('alias').annotate(m=Max('id')).values('m') authors = Author.objects.filter(id=max_ids[:1]) self.assertFalse(str(max_ids.query)) # This was just to force the test-runner to output the query. self.assertEqual(authors[0], author_2) And here's the resulting query: SELECT MAX(\"lookup_author\".\"id\") AS \"m\" FROM \"lookup_author\" WHERE \"lookup_author\".\"alias\" IS NULL GROUP BY \"lookup_author\".\"alias\", \"lookup_author\".\"name\" It no longer appears to be grouping by the 'alias' field listed in the initial .values() preceeding the .annotate(). I looked at the docs and release notes to see if there was a behavior change, but didn't see anything listed. Do you know if I'm just misunderstanding what's happening here? Or does this seem like a possible regression?\nIt's possible that a regression was introduced in between. Could you try bisecting the commit that changed the behavior ​https://docs.djangoproject.com/en/dev/internals/contributing/triaging-tickets/#bisecting-a-regression\nMmm actually disregard that. The second value in the GROUP BY is due to the ordering value in the Author class's Meta class. class Author(models.Model): name = models.CharField(max_length=100) alias = models.CharField(max_length=50, null=True, blank=True) class Meta: ordering = ('name',) Regarding the bug in question in this ticket, what should the desired behavior be if the inner query is returning multiple fields? With the fix, which allows the inner query to define a field to return/group by, if there are multiple fields used then it will throw a sqlite3.OperationalError: row value misused. Is this the desired behavior or should it avoid this problem by defaulting back to pk if more than one field is selected?\nI think that we should only default to pk if no fields are selected. The ORM has preliminary support for multi-column lookups and other interface dealing with subqueries doesn't prevent passing queries with multiple fields so I'd stick to the current __in lookup behavior.",
+      "user_message_length": 3982,
+      "agent_response": "The issue you're facing is due to the way Django's ORM handles subqueries. \n\nWhen you use `values()` followed by `annotate()`, Django will group the results by the fields specified in `values()`. However, when you use the result of this query as a subquery in another query, Django will override the `GROUP BY` clause with the primary key of the model.\n\nTo fix this issue, you can use the `aggregate()` method instead of `annotate()` and `values()` to get the maximum `id` for the subquery. Here's how you can modify your code:\n\n```python\nfrom django.db.models import Max\n\na = models.User.objects.filter(email__isnull=True).values('email').annotate(m=Max('id')).values('m')\nb = models.User.objects.filter(id=a[:1])\n```\n\nShould be modified to:\n\n```python\nfrom django.db.models import Max\n\na = models.User.objects.filter(email__isnull=True).values('email').aggregate(Max('id'))['id__max']\nb = models.User.objects.filter(id=a)\n```\n\nAlternatively, you can also use `Subquery` to achieve the same result:\n\n```python\nfrom django.db.models import Subquery, OuterRef, Max\n\nsubquery = models.User.objects.filter(email__isnull=True).values('email').annotate(m=Max('id')).values('m')\nb = models.User.objects.filter(id__in=Subquery(subquery))\n```\n\nHowever, the best approach would be to use the `aggregate()` method as it's more efficient and straightforward.\n\nRegarding the desired behavior when the inner query returns multiple fields, it's correct that the current implementation will throw a `sqlite3.OperationalError: row value misused` error. \n\nTo handle this case, you could add a check to ensure that only one field is selected in the subquery. If multiple fields are selected, you could either raise an error or default to the primary key. However, as suggested, the ORM should only default to the primary key if no fields are selected.\n\nHere's an example of how you could modify the `Exact` lookup to handle this case:\n\n```python\nclass Exact(Lookup):\n    def process_rhs(self, compiler, connection):\n        if not hasattr(self.rhs, 'has_select_fields'):\n            # If the rhs is not a query, return it as is\n            return self.rhs\n        if self.rhs.has_select_fields:\n            # If the rhs has multiple fields, raise an error\n            if len(self.rhs.select_fields) > 1:\n                raise ValueError(\"Subquery must select only one field\")\n            # If the rhs has one field, return it as is\n            return self.rhs\n        # If the rhs has no fields, default to the primary key\n        return OuterRef('pk')\n```\n\nThis implementation will raise an error if the subquery selects multiple fields, and will default to the primary key if no fields are selected.",
+      "agent_response_length": 2683,
+      "routed_to": "primary",
+      "latency_ms": 5018.594741821289,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 1106,
+        "completion_tokens": 614,
+        "total_tokens": 1720
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-03T12:16:29.116936",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "In that case, let's take a closer look at the error message and the code.\n\nThe error message is indicating that the `row value misused` error is occurring because the subquery is returning multiple values, but the outer query is expecting only one value.\n\nHere's an alternative approach that you can try:\n\n```python\nfrom django.db.models import Subquery, OuterRef, Max\n\nsubquery = models.User.objects.filter(email__isnull=True).order_by('-id')[:1]\nb = models.User.objects.filter(id__in=Subquery(subquery.values('id')))\n```\n\nIn this code, we're first ordering the subquery by the `id` field in descending order, and then selecting only the first row (`[:1]`). This ensures that the subquery returns only one row with a single `id` value.\n\nWe then use this subquery in the outer query, filtering the `User` objects to include only those with an `id` that matches the `id` returned by the subquery.\n\nPlease note that this approach assumes that you're using a database that supports the `ORDER BY` and `LIMIT` clauses in subqueries (such as PostgreSQL). If you're using a different database (such as SQLite), you may need to use a different approach.\n\nAlternatively, you can use the `values_list` method to select only the `id` field from the subquery:\n\n```python\nsubquery = models.User.objects.filter(email__isnull=True).order_by('-id').values_list('id', flat=True)[:1]\nb = models.User.objects.filter(id__in=subquery)\n```\n\nThis approach is more database-agnostic and should work with most databases supported by Django.",
+      "agent_response_length": 1516,
+      "routed_to": "primary",
+      "latency_ms": 2500.056505203247,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 785,
+        "completion_tokens": 349,
+        "total_tokens": 1134
+      }
+    }
+  ],
+  "total_latency_ms": 7518.651247024536,
+  "total_tokens": 2854,
+  "arbiter_invocations": 0,
+  "end_time": "2026-02-03T12:16:29.116936",
+  "total_turns": 2,
+  "avg_latency_ms": 3759.325623512268,
+  "avg_tokens_per_turn": 1427.0
+}

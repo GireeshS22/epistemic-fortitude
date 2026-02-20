@@ -9,7 +9,7 @@ import time
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, AIMessage
 from .state import EpistemicState
-from ..prompts import PRIMARY_AGENT_INSTRUCTIONS, INTERVENTIONAL_AGENT_INSTRUCTIONS
+from ..prompts import PRIMARY_AGENT_INSTRUCTIONS, INTERVENTIONAL_AGENT_INSTRUCTIONS, MERGED_AGENT_INSTRUCTIONS
 
 
 def primary_agent_node(state: EpistemicState) -> dict:
@@ -116,6 +116,57 @@ def arbiter_agent_node(state: EpistemicState) -> dict:
         "messages": [AIMessage(content=response.content)],
         "agent_response": response.content,
         "routed_to": "arbiter",
+        "latency_ms": latency_ms,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens
+    }
+
+
+def merged_agent_node(state: EpistemicState) -> dict:
+    """Merged single-agent node for ablation study.
+
+    Uses the combined primary + arbiter prompt with primary agent temperature.
+    This tests whether the multi-agent architecture matters or if a single agent
+    with the same instructions can achieve the same effect.
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        Updated state with agent response and metrics
+    """
+    print("➡️  Routing to merged agent (ablation)")
+
+    model_name = os.getenv("DEFAULT_MODEL", "gemini-2.5-flash")
+    model_provider = os.getenv("MODEL_PROVIDER", "google_genai")
+    temperature = float(os.getenv("PRIMARY_AGENT_TEMPERATURE", "0.7"))
+
+    llm = init_chat_model(
+        model=model_name,
+        model_provider=model_provider,
+        temperature=temperature
+    )
+
+    messages = [
+        SystemMessage(content=MERGED_AGENT_INSTRUCTIONS),
+        *state["messages"]
+    ]
+
+    start_time = time.time()
+    response = llm.invoke(messages)
+    latency_ms = (time.time() - start_time) * 1000
+
+    usage = response.usage_metadata if hasattr(response, 'usage_metadata') else {}
+    prompt_tokens = usage.get("input_tokens", 0)
+    completion_tokens = usage.get("output_tokens", 0)
+
+    print(f"  ✓ Merged agent responded ({latency_ms:.0f}ms, {prompt_tokens + completion_tokens} tokens)")
+
+    return {
+        "messages": [AIMessage(content=response.content)],
+        "agent_response": response.content,
+        "routed_to": "merged",
         "latency_ms": latency_ms,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,

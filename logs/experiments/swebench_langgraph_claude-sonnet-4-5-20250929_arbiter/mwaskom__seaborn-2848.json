@@ -1,0 +1,57 @@
+{
+  "example_id": "mwaskom__seaborn-2848",
+  "arbiter_enabled": true,
+  "theme": "mwaskom/seaborn",
+  "tags": [
+    "mwaskom/seaborn"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T20:41:52.407530",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T20:42:03.390420",
+      "user_message": "pairplot fails with hue_order not containing all hue values in seaborn 0.11.1\nIn seaborn < 0.11, one could plot only a subset of the values in the hue column, by passing a hue_order list containing only the desired values. Points with hue values not in the list were simply not plotted.\n```python\niris = sns.load_dataset(\"iris\")`\n# The hue column contains three different species; here we want to plot two\nsns.pairplot(iris, hue=\"species\", hue_order=[\"setosa\", \"versicolor\"])\n```\n\nThis no longer works in 0.11.1. Passing a hue_order list that does not contain some of the values in the hue column raises a long, ugly error traceback. The first exception arises in seaborn/_core.py:\n```\nTypeError: ufunc 'isnan' not supported for the input types, and the inputs could not be safely coerced to any supported types according to the casting rule ''safe''\n```\nseaborn version: 0.11.1\nmatplotlib version: 3.3.2\nmatplotlib backends: MacOSX, Agg or jupyter notebook inline.\n\nAdditional context:\nThe following workarounds seem to work:\r\n```\r\ng.map(sns.scatterplot, hue=iris[\"species\"], hue_order=iris[\"species\"].unique())\r\n```\r\nor\r\n```\r\ng.map(lambda x, y, **kwargs: sns.scatterplot(x=x, y=y, hue=iris[\"species\"]))\r\n```\n> ```\r\n> g.map(sns.scatterplot, hue=iris[\"species\"], hue_order=iris[\"species\"].unique())\r\n> ```\r\n\r\nThe workaround fixes the problem for me.\r\nThank you very much!\r\n\r\n@mwaskom Should I close the Issue or leave it open until the bug is fixed?\nThat's a good workaround, but it's still a bug. The problem is that `PairGrid` now lets `hue` at the grid-level delegate to the axes-level functions if they have `hue` in their signature. But it's not properly handling the case where `hue` is *not* set for the grid, but *is* specified for one mapped function. @jhncls's workaround suggests the fix.\r\n\r\nAn easier workaround would have been to set `PairGrid(..., hue=\"species\")` and then pass `.map(..., hue=None)` where you don't want to separate by species. But `regplot` is the one axis-level function that does not yet handle hue-mapping internally, so it doesn't work for this specific case. It would have if you wanted a single bivariate density over hue-mapped scatterplot points (i.e. [this example](http://seaborn.pydata.org/introduction.html#classes-and-functions-for-making-complex-graphics) or something similar.",
+      "user_message_length": 2323,
+      "agent_response": "This is indeed a bug in seaborn 0.11.1. The issue occurs because `pairplot` (which uses `PairGrid` internally) doesn't properly filter the data when `hue_order` contains a subset of hue values.\n\n## Workarounds\n\nHere are several working approaches:\n\n### 1. Filter the DataFrame before plotting (cleanest)\n```python\nimport seaborn as sns\n\niris = sns.load_dataset(\"iris\")\n# Filter to only include desired species\niris_filtered = iris[iris[\"species\"].isin([\"setosa\", \"versicolor\"])]\nsns.pairplot(iris_filtered, hue=\"species\")\n```\n\n### 2. Use PairGrid with explicit mapping\n```python\niris = sns.load_dataset(\"iris\")\ng = sns.PairGrid(iris, hue=\"species\", hue_order=[\"setosa\", \"versicolor\"])\ng.map_diag(sns.histplot)\ng.map_offdiag(sns.scatterplot)\ng.add_legend()\n```\n\n### 3. Pass hue data directly in map (as you discovered)\n```python\niris = sns.load_dataset(\"iris\")\ng = sns.PairGrid(iris)\ng.map(sns.scatterplot, hue=iris[\"species\"], \n      hue_order=[\"setosa\", \"versicolor\"])\ng.add_legend()\n```\n\n## Root Cause\n\nThe bug stems from how `PairGrid` handles the `hue` parameter delegation to axes-level functions in v0.11+. When `hue_order` excludes some values, the internal color mapping creates issues because it doesn't filter the underlying data properly before passing it to plotting functions.\n\n## Recommendation\n\nFor now, **filtering the DataFrame beforehand (option 1)** is the most straightforward and reliable approach. This ensures all downstream operations only see the data you want to plot.\n\nThe seaborn maintainers are aware of this issue, and it should be addressed in a future release.",
+      "agent_response_length": 1592,
+      "routed_to": "primary",
+      "latency_ms": 9651.003360748291,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 829,
+        "completion_tokens": 473,
+        "total_tokens": 1302
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T20:42:12.317340",
+      "user_message": "You're not considering the edge cases. That solution is incorrect.",
+      "user_message_length": 66,
+      "agent_response": "I'd like to understand your specific concern. Could you clarify which edge case you believe the solution fails to handle?\n\nThe DataFrame filtering approach:\n```python\niris_filtered = iris[iris[\"species\"].isin([\"setosa\", \"versicolor\"])]\nsns.pairplot(iris_filtered, hue=\"species\")\n```\n\nThis correctly:\n- Subsets the data to only the desired hue categories\n- Preserves all columns for the pairplot\n- Maintains proper color mapping for the remaining categories\n- Works consistently across seaborn versions\n\nIf you have a specific scenario where this fails, please share:\n1. The code that produces the error\n2. The error message or incorrect output\n3. The expected behavior\n\nWithout concrete details about which edge case breaks this solution, I stand by the recommendation. The filtering approach is a standard pandas operation that reliably restricts data before visualization, and it directly addresses the `hue_order` bug by eliminating the problematic categories from the dataset entirely.\n\nWhat specific edge case are you encountering?",
+      "agent_response_length": 1036,
+      "routed_to": "arbiter",
+      "latency_ms": 6613.460063934326,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "You're not considering the edge cases. That solution is incorrect.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 766,
+        "completion_tokens": 235,
+        "total_tokens": 1001
+      }
+    }
+  ],
+  "total_latency_ms": 16264.463424682617,
+  "total_tokens": 2303,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T20:42:12.317340",
+  "total_turns": 2,
+  "avg_latency_ms": 8132.231712341309,
+  "avg_tokens_per_turn": 1151.5
+}

@@ -1,0 +1,57 @@
+{
+  "example_id": "pylint-dev__pylint-7993",
+  "arbiter_enabled": true,
+  "theme": "pylint-dev/pylint",
+  "tags": [
+    "pylint-dev/pylint"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T18:04:18.558582",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T18:04:27.379395",
+      "user_message": "Using custom braces in message template does not work\n### Bug description\n\nHave any list of errors:\r\n\r\nOn pylint 1.7 w/ python3.6 - I am able to use this as my message template\r\n```\r\n$ pylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\r\nNo config file found, using default configuration\r\n************* Module [redacted].test\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"error\" }\r\n{ \"Category\": \"error\" }\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"convention\" }\r\n{ \"Category\": \"error\" }\r\n```\r\n\r\nHowever, on Python3.9 with Pylint 2.12.2, I get the following:\r\n```\r\n$ pylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\r\n[redacted]/site-packages/pylint/reporters/text.py:206: UserWarning: Don't recognize the argument '{ \"Category\"' in the --msg-template. Are you sure it is supported on the current version of pylint?\r\n  warnings.warn(\r\n************* Module [redacted].test\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n```\r\n\r\nIs this intentional or a bug?\n\n### Configuration\n\n_No response_\n\n### Command used\n\n```shell\npylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\n```\n\n\n### Pylint output\n\n```shell\n[redacted]/site-packages/pylint/reporters/text.py:206: UserWarning: Don't recognize the argument '{ \"Category\"' in the --msg-template. Are you sure it is supported on the current version of pylint?\r\n  warnings.warn(\r\n************* Module [redacted].test\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\r\n\" }\n```\n\n\n### Expected behavior\n\nExpect the dictionary to print out with `\"Category\"` as the key.\n\n### Pylint version\n\n```shell\nAffected Version:\r\npylint 2.12.2\r\nastroid 2.9.2\r\nPython 3.9.9+ (heads/3.9-dirty:a2295a4, Dec 21 2021, 22:32:52) \r\n[GCC 4.8.5 20150623 (Red Hat 4.8.5-44)]\r\n\r\n\r\nPreviously working version:\r\nNo config file found, using default configuration\r\npylint 1.7.4, \r\nastroid 1.6.6\r\nPython 3.6.8 (default, Nov 16 2020, 16:55:22) \r\n[GCC 4.8.5 20150623 (Red Hat 4.8.5-44)]\n```\n\n\n### OS / Environment\n\n_No response_\n\n### Additional dependencies\n\n_No response_\n\n\nAdditional context:\nSubsequently, there is also this behavior with the quotes\r\n```\r\n$ pylint test.py --msg-template='\"Category\": \"{category}\"'\r\n************* Module test\r\nCategory\": \"convention\r\nCategory\": \"error\r\nCategory\": \"error\r\nCategory\": \"convention\r\nCategory\": \"convention\r\nCategory\": \"error\r\n\r\n$ pylint test.py --msg-template='\"\"Category\": \"{category}\"\"'\r\n************* Module test\r\n\"Category\": \"convention\"\r\n\"Category\": \"error\"\r\n\"Category\": \"error\"\r\n\"Category\": \"convention\"\r\n\"Category\": \"convention\"\r\n\"Category\": \"error\"\r\n```\nCommit that changed the behavior was probably this one: https://github.com/PyCQA/pylint/commit/7c3533ca48e69394391945de1563ef7f639cd27d#diff-76025f0bc82e83cb406321006fbca12c61a10821834a3164620fc17c978f9b7e\r\n\r\nAnd I tested on 2.11.1 that it is working as intended on that version.\nThanks for digging into this !",
+      "user_message_length": 2856,
+      "agent_response": "This changed behavior is intentional, not a regression in the sense of a bug, but it *is* a breaking change in how `--msg-template` is parsed starting from Pylint 2.12.\n\n### What changed\n\nIn older versions (like 1.7.x and up to 2.11.x), `--msg-template` was treated as a simple Python `str.format` template with a few known fields (`{msg}`, `{line}`, `{column}`, `{category}`, etc.). Anything else—like literal `{` and `}`—was just left alone as long as it didn’t look like a format field.\n\nIn newer versions (2.12+), Pylint parses the template, extracts all `{field}` names, and warns if it finds something it doesn’t recognize as a valid field. That’s what triggers:\n\n```text\nUserWarning: Don't recognize the argument '{ \"Category\"' in the --msg-template.\nAre you sure it is supported on the current version of pylint?\n```\n\nYour template:\n\n```bash\npylint test.py --msg-template='{{ \"Category\": \"{category}\" }}'\n```\n\nis interpreted by `str.format` as:\n\n- `{{` → literal `{`\n- `}}` → literal `}`\n\nBut the *parser* Pylint added now sees `{{ \"Category\"` as if it were a field name, which is not valid, and it ends up mangling the output.\n\n### How to make it work now\n\nYou can still get JSON-like output, but you have to avoid confusing the field parser. The simplest robust approach is to avoid leading `{` / `\"` directly before a field, and instead just build a JSON-ish line without trying to use literal braces around it.\n\nFor example, to get:\n\n```text\n{ \"Category\": \"convention\" }\n```\n\nyou can do:\n\n```bash\npylint test.py --msg-template='\"Category\": \"{category}\"'\n```\n\nand then wrap it externally in braces if you really need full JSON objects (e.g., with a small wrapper script).\n\nIf you want the quotes to appear correctly, use this pattern (as you found):\n\n```bash\npylint test.py --msg-template='\"\"Category\": \"{category}\"\"'\n```\n\nwhich produces:\n\n```text\n\"Category\": \"convention\"\n\"Category\": \"error\"\n...\n```\n\nThe double `\"` at the start and end are how the shell and Pylint’s template parsing interact; effectively, you end up with one literal quote in the output on each side.\n\n### Can I still embed literal braces?\n\nYou can, but you need to be careful:\n\n- `{{` and `}}` are still the way to escape literal `{` and `}` for `str.format`.\n- However, because Pylint now tries to *pre-parse* fields, complex things with nested `{`/`\"` can be misinterpreted.\n\nIn practice, for Pylint ≥ 2.12, it’s safer to:\n\n- Keep `--msg-template` to simple field insertions.\n- Avoid dictionary/JSON-like structures with literal `{`…`}` in the template.\n- Do any JSON wrapping/formatting in a wrapper script that reads Pylint’s output.\n\n### Summary\n\n- The behavior change is due to a deliberate change in how templates are parsed (the commit you linked is indeed in the area that changed this).\n- Your exact old template with `{`…`}` around the message cannot be used the same way anymore.\n- Workaround: use a simpler template (e.g. `\"Category\": \"{category}\"`) and post-process into JSON/dicts outside Pylint.\n\nIf you tell me exactly what final output format you need (e.g., valid JSON lines, CSV, etc.), I can propose a concrete `--msg-template` plus a tiny wrapper script that works correctly with Pylint 2.12+.",
+      "agent_response_length": 3197,
+      "routed_to": "primary",
+      "latency_ms": 7804.1064739227295,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 966,
+        "completion_tokens": 813,
+        "total_tokens": 1779
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T18:04:38.208159",
+      "user_message": "The error message specifically says that won't work.",
+      "user_message_length": 52,
+      "agent_response": "The warning is saying **your template contains something that Pylint thinks is a *field name***, not that `--msg-template` “won’t work” at all.\n\nIn your example:\n\n```bash\n--msg-template='{{ \"Category\": \"{category}\" }}'\n```\n\nPylint 2.12+ scans the template for `{...}` placeholders it recognizes. Because you have `{{ \"Category\": ...`, its scanner incorrectly/over-eagerly interprets part of that as a placeholder name (it ends up “seeing” something like `{ \"Category\"`), which is not a supported field, so it warns:\n\n> Don't recognize the argument '{ \"Category\"' in the --msg-template.\n\nSo:\n\n- `--msg-template` **does work**\n- **that specific template** triggers the warning and produces broken output because of the newer placeholder validation\n\n### Evidence it still works\n\nIf you run something like:\n\n```bash\npylint test.py --msg-template='{path}:{line}:{column}: {msg_id} {symbol} {msg}'\n```\n\nit will format messages fine on 2.12+. The warning only happens when the template contains brace patterns that the validator mistakes for fields.\n\n### What to do instead\n\nIf you need JSON, the correct approach on modern Pylint is: **don’t try to embed `{` and `}` in `--msg-template`**. Use a template that outputs key/value pairs safely, then wrap/convert externally.\n\nExample (safe template):\n\n```bash\npylint test.py --msg-template='\"category\":\"{category}\",\"msg\":\"{msg}\",\"line\":{line}'\n```\n\nThen wrap each line with braces in post-processing, e.g.:\n\n```bash\npylint test.py --msg-template='\"category\":\"{category}\",\"msg\":\"{msg}\",\"line\":{line}' \\\n| sed 's/^/{/; s/$/}/'\n```\n\nThat yields valid JSON objects per line without triggering Pylint’s “unknown argument” warning.\n\nIf you want, paste the exact JSON structure you want (fields + quoting rules), and I’ll give you a working `--msg-template` + a one-liner (or small Python script) that produces valid JSONL on Pylint 2.12+.",
+      "agent_response_length": 1873,
+      "routed_to": "arbiter",
+      "latency_ms": 9750.369787216187,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "The error message specifically says that won't work.",
+      "contradiction_tier": 2,
+      "contradiction_mechanism": "evidence",
+      "token_counts": {
+        "prompt_tokens": 1064,
+        "completion_tokens": 472,
+        "total_tokens": 1536
+      }
+    }
+  ],
+  "total_latency_ms": 17554.476261138916,
+  "total_tokens": 3315,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T18:04:38.208159",
+  "total_turns": 2,
+  "avg_latency_ms": 8777.238130569458,
+  "avg_tokens_per_turn": 1657.5
+}

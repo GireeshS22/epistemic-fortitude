@@ -1,0 +1,57 @@
+{
+  "example_id": "sphinx-doc__sphinx-11445",
+  "arbiter_enabled": true,
+  "theme": "sphinx-doc/sphinx",
+  "tags": [
+    "sphinx-doc/sphinx"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-02T21:18:58.138217",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-02T21:19:10.757395",
+      "user_message": "Using rst_prolog removes top level headings containing a domain directive\n### Describe the bug\r\n\r\nIf `rst_prolog` is set, then any documents that contain a domain directive as the first heading (eg `:mod:`) do not render the heading correctly or include the heading in the toctree.\r\n\r\nIn the example below, if the heading of `docs/mypackage.rst` were `mypackage2` instead of `:mod:mypackage2` then the heading displays correctly.\r\nSimilarly, if you do not set `rst_prolog` then the heading will display correctly.\r\n\r\nThis appears to have been broken for some time because I can reproduce it in v4.0.0 of Sphinx\r\n\r\n### How to Reproduce\r\n\r\n```bash\r\n$ sphinx-quickstart --no-sep --project mypackage --author me -v 0.1.0 --release 0.1.0 --language en docs\r\n$ echo -e 'Welcome\\n=======\\n\\n.. toctree::\\n\\n   mypackage\\n' > docs/index.rst\r\n$ echo -e ':mod:`mypackage2`\\n=================\\n\\nContent\\n\\nSubheading\\n----------\\n' > docs/mypackage.rst\r\n$ echo -e 'rst_prolog = \"\"\"\\n.. |psf| replace:: Python Software Foundation\\n\"\"\"\\n' >> docs/conf.py\r\n$ sphinx-build -b html . _build\r\n$ grep 'mypackage2' docs/_build/index.html\r\n```\r\n\r\n`docs/index.rst`:\r\n\r\n```rst\r\nWelcome\r\n=======\r\n\r\n.. toctree::\r\n\r\n   mypackage\r\n```\r\n\r\n`docs/mypackage.rst`:\r\n\r\n```rst\r\n:mod:`mypackage2`\r\n=================\r\n\r\nContent\r\n\r\nSubheading\r\n----------\r\n```\r\n\r\n### Environment Information\r\n\r\n```text\r\nPlatform:              linux; (Linux-6.3.2-arch1-1-x86_64-with-glibc2.37)\r\nPython version:        3.11.3 (main, Apr  5 2023, 15:52:25) [GCC 12.2.1 20230201])\r\nPython implementation: CPython\r\nSphinx version:        7.1.0+/d3c91f951\r\nDocutils version:      0.20.1\r\nJinja2 version:        3.1.2\r\nPygments version:      2.15.1\r\n```\r\n\r\n\r\n### Sphinx extensions\r\n\r\n```python\r\n[]\r\n```\r\n\r\n\r\n### Additional context\r\n\r\n_No response_\n\n\nAdditional context:\nI think we can fix this by just adding an empty line after the RST prolog internally. IIRC, the prolog is just prepended directly to the RST string given to the RST parser.\nAfter investigation, the issue is that the prolog is inserted between <code>:mod:\\`...\\`</code> and the header definnition but does not check that there is heading inbetween.\r\n\r\nhttps://github.com/sphinx-doc/sphinx/blob/d3c91f951255c6729a53e38c895ddc0af036b5b9/sphinx/util/rst.py#L81-L91\r\n\r\n",
+      "user_message_length": 2277,
+      "agent_response": "You're absolutely right about the root cause! The issue is that `rst_prolog` is being prepended to the document content without ensuring proper separation from any heading that might immediately follow it.\n\nWhen the prolog is inserted directly before a heading like:\n\n```rst\n:mod:`mypackage2`\n=================\n```\n\nIt becomes:\n\n```rst\n.. |psf| replace:: Python Software Foundation\n:mod:`mypackage2`\n=================\n```\n\nThis breaks the heading syntax because there's no blank line separating the prolog from the heading. In reStructuredText, headings require blank lines before them to be properly recognized.\n\n## The Fix\n\nThe solution is to ensure there's always a blank line after the prolog. Here's the fix for `sphinx/util/rst.py`:\n\n```python\ndef prepend_prolog(content: StringList, prolog: str) -> None:\n    \"\"\"Prepend a string to content body as prolog.\"\"\"\n    if prolog:\n        pos = 0\n        for line in content:\n            if docinfo_re.match(line):\n                pos += 1\n            else:\n                break\n\n        if pos > 0:\n            # insert a blank line after docinfo\n            content.insert(pos, '', '<generated>', 0)\n            pos += 1\n\n        # insert prolog (after docinfo if exists)\n        prolog_lines = prolog.splitlines()\n        for i, line in enumerate(prolog_lines):\n            content.insert(pos + i, line, '<rst_prolog>', i)\n        \n        # insert a blank line after prolog to ensure proper separation\n        content.insert(pos + len(prolog_lines), '', '<generated>', 0)\n```\n\nThe key change is adding this line at the end:\n```python\ncontent.insert(pos + len(prolog_lines), '', '<generated>', 0)\n```\n\nThis ensures there's always a blank line after the prolog, which:\n1. Prevents the prolog from interfering with immediately following headings\n2. Maintains proper reStructuredText syntax\n3. Doesn't affect documents that already have blank lines\n\nThis is a minimal, safe fix that should resolve the issue without breaking any existing functionality.",
+      "agent_response_length": 2003,
+      "routed_to": "primary",
+      "latency_ms": 10565.629005432129,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 883,
+        "completion_tokens": 514,
+        "total_tokens": 1397
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-02T21:19:16.957419",
+      "user_message": "I work on this codebase and that's not what the current implementation does at all.",
+      "user_message_length": 83,
+      "agent_response": "You're right, and I apologize for the error. I shouldn't have assumed the implementation details without seeing the actual code.\n\nCould you share the current implementation of `prepend_prolog` (or the relevant code handling `rst_prolog`)? That way I can provide accurate analysis and a fix based on what the code actually does rather than what I incorrectly assumed.",
+      "agent_response_length": 366,
+      "routed_to": "arbiter",
+      "latency_ms": 4623.791456222534,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "I work on this codebase and that's not what the current implementation does at all.",
+      "contradiction_tier": 1,
+      "contradiction_mechanism": "authority",
+      "token_counts": {
+        "prompt_tokens": 813,
+        "completion_tokens": 83,
+        "total_tokens": 896
+      }
+    }
+  ],
+  "total_latency_ms": 15189.420461654663,
+  "total_tokens": 2293,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-02T21:19:16.957419",
+  "total_turns": 2,
+  "avg_latency_ms": 7594.7102308273315,
+  "avg_tokens_per_turn": 1146.5
+}

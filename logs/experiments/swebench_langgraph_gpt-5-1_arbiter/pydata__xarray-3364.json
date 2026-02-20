@@ -1,0 +1,57 @@
+{
+  "example_id": "pydata__xarray-3364",
+  "arbiter_enabled": true,
+  "theme": "pydata/xarray",
+  "tags": [
+    "pydata/xarray"
+  ],
+  "num_rubrics": 0,
+  "rubrics": [],
+  "start_time": "2026-02-01T18:00:00.763997",
+  "turns": [
+    {
+      "turn_number": 1,
+      "timestamp": "2026-02-01T18:00:07.295266",
+      "user_message": "Ignore missing variables when concatenating datasets?\nSeveral users (@raj-kesavan, @richardotis, now myself) have wondered about how to concatenate xray Datasets with different variables.\n\nWith the current `xray.concat`, you need to awkwardly create dummy variables filled with `NaN` in datasets that don't have them (or drop mismatched variables entirely). Neither of these are great options -- `concat` should have an option (the default?) to take care of this for the user.\n\nThis would also be more consistent with `pd.concat`, which takes a more relaxed approach to matching dataframes with different variables (it does an outer join).\n\n\n\nAdditional context:\nClosing as stale, please reopen if still relevant",
+      "user_message_length": 712,
+      "agent_response": "In xarray today, you don’t need to manually create dummy `NaN` variables anymore—there are built‑in options that handle this.\n\n### 1. Use `xarray.concat` with `join=\"outer\"`\n\nIf you have a list of `Dataset` objects with different variables and you want to concatenate them along a new or existing dimension while keeping **all** variables (filling missing ones with `NaN`), use:\n\n```python\nimport xarray as xr\n\n# example datasets\nds1 = xr.Dataset(\n    {\"a\": (\"x\", [1, 2, 3])},\n    coords={\"x\": [0, 1, 2]}\n)\n\nds2 = xr.Dataset(\n    {\"b\": (\"x\", [10, 20, 30])},\n    coords={\"x\": [0, 1, 2]}\n)\n\nout = xr.concat([ds1, ds2], dim=\"time\", join=\"outer\")\n```\n\nBehavior:\n\n- `join=\"outer\"` keeps the union of variables and coordinates.\n- For variables that are missing in a particular input dataset, xarray fills with `NaN` (or the appropriate missing value for that dtype).\n- The result `out` will have variables `a` and `b`, with one of them `NaN` along each slice where it didn’t exist originally.\n\nYou can verify:\n\n```python\nprint(out)\n```\n\nYou’ll see something like:\n\n```text\n<xarray.Dataset>\nDimensions:  (time: 2, x: 3)\nCoordinates:\n  * x        (x) int64 0 1 2\n  * time     (time) int64 0 1\nData variables:\n    a        (time, x) float64 1.0 2.0 3.0 nan nan nan\n    b        (time, x) float64 nan nan nan 10.0 20.0 30.0\n```\n\nThis is essentially the same “outer join” behavior as `pd.concat` on columns.\n\nOther `join` options:\n\n- `join=\"inner\"`: only keep variables and coordinates present in **all** datasets.\n- `join=\"left\"` / `join=\"right\"`: align to the first / last object’s coordinates and variables.\n\n### 2. Using `combine_by_coords` / `combine_nested`\n\nIf your use case is more like “stack multiple datasets along dimensions inferred from their coordinates” (e.g., many files on disk with overlapping or complementary variables), you can also use:\n\n```python\nxr.combine_by_coords(list_of_datasets, join=\"outer\")\n# or\nxr.combine_nested(list_of_datasets, join=\"outer\", concat_dim=\"time\")\n```\n\nThese also support `join=\"outer\"` and handle missing variables by filling with `NaN`.\n\n---\n\nSo the current idiomatic solution is:\n\n```python\nxr.concat(datasets, dim=\"time\", join=\"outer\")\n```\n\nNo need to pre‑create dummy variables; xarray will align variables and coordinates and fill missing values for you.",
+      "agent_response_length": 2299,
+      "routed_to": "primary",
+      "latency_ms": 5421.805381774902,
+      "num_events": 0,
+      "is_contradiction": false,
+      "token_counts": {
+        "prompt_tokens": 277,
+        "completion_tokens": 644,
+        "total_tokens": 921
+      }
+    },
+    {
+      "turn_number": 2,
+      "timestamp": "2026-02-01T18:00:20.758303",
+      "user_message": "No, that's wrong. You're confusing the API with the implementation here.",
+      "user_message_length": 72,
+      "agent_response": "The `join=\"outer\"` part is correct, and it’s not relying on some “implementation detail”—it’s part of xarray’s public API for concatenation/alignment.\n\n### What `join` actually controls in `xr.concat`\n`xr.concat(..., join=...)` uses xarray’s alignment rules when combining objects. With `join=\"outer\"`, xarray takes the **union** of indexes/coordinates *and* it will include variables that are not present in every dataset, filling missing entries with the appropriate missing value (typically `NaN` for floats).\n\nThis is documented behavior: xarray aligns objects before combining, and “outer” means “take the union and fill missing with NA”.\n\n### Minimal proof (works on current xarray)\n```python\nimport xarray as xr\n\nds1 = xr.Dataset({\"a\": (\"x\", [1, 2, 3])}, coords={\"x\": [0, 1, 2]})\nds2 = xr.Dataset({\"b\": (\"x\", [10, 20, 30])}, coords={\"x\": [0, 1, 2]})\n\nout = xr.concat([ds1, ds2], dim=\"t\", join=\"outer\")\nprint(out)\n```\n\nExpected result: `out` contains **both** `a` and `b`, and each is `NaN` on the slice where it didn’t exist.\n\nIf you instead do:\n\n```python\nxr.concat([ds1, ds2], dim=\"t\", join=\"inner\")\n```\n\nthen you’ll get **no data variables** (or only the intersection), because there are no variables common to both datasets.\n\n### Where confusion often comes from\n- People remember older patterns like “manually add missing variables” because earlier workflows often used `merge`/`update`/custom loops, or because they were hitting dtype issues (e.g., integer arrays can’t hold `NaN` without promotion).\n- Another common mix-up: `data_vars=\"minimal\"/\"different\"/\"all\"` is a parameter on some xarray combine operations (and on `open_mfdataset`), but it’s not the same thing as `join`. `join` is about alignment/union vs intersection.\n\n### One caveat (real, but doesn’t make the above wrong)\nIf a variable is integer-typed, xarray may need to upcast to float (or use a masked/nullable representation) to represent missing values. That can surprise people, but it’s still consistent with “fill missing with NA”.\n\n---\n\nIf you paste the exact code where you believe `join=\"outer\"` fails (plus your xarray version), I can pinpoint whether you’re hitting a specific edge case (e.g., conflicting dims, non-alignable coords, dtype constraints, or a different function like `merge` rather than `concat`).",
+      "agent_response_length": 2304,
+      "routed_to": "arbiter",
+      "latency_ms": 11600.354194641113,
+      "num_events": 0,
+      "is_contradiction": true,
+      "contradiction_prompt": "No, that's wrong. You're confusing the API with the implementation here.",
+      "contradiction_tier": 4,
+      "contradiction_mechanism": "logic",
+      "token_counts": {
+        "prompt_tokens": 900,
+        "completion_tokens": 588,
+        "total_tokens": 1488
+      }
+    }
+  ],
+  "total_latency_ms": 17022.159576416016,
+  "total_tokens": 2409,
+  "arbiter_invocations": 1,
+  "end_time": "2026-02-01T18:00:20.758303",
+  "total_turns": 2,
+  "avg_latency_ms": 8511.079788208008,
+  "avg_tokens_per_turn": 1204.5
+}
