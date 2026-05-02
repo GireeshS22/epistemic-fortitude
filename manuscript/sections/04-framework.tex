@@ -1,0 +1,233 @@
+%% Section 3: The Epistemic Fortitude Framework
+\section{Framework}
+\label{sec:framework}
+\subsection{System Architecture}
+\label{subsec:architecture}
+
+% High-level overview
+The framework consists of three core components: a \textbf{Primary Agent} for conversational interaction, an \textbf{Arbiter Agent} for epistemic adjudication, and a \textbf{Hybrid Router} that determines which agent handles each user input.
+
+% State management
+The system maintains an \texttt{EpistemicState} that tracks:
+\begin{itemize}
+    \item \textbf{Conversation history}: Complete message sequence for context preservation
+    \item \textbf{Routing decisions}: Which agent handled each turn and why
+    \item \textbf{Performance metrics}: Token usage, latency, and arbiter invocation rate
+    \item \textbf{Epistemic reasoning}: Arbiter's justification when interventions occur
+\end{itemize}
+
+This state enables multi-turn coherence and provides transparency for debugging and evaluation.
+Figure~\ref{fig:interaction-flow} illustrates the conversational flow through the system.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm,
+    process/.style={rectangle, draw, fill=blue!10, text width=4.5cm, text centered, rounded corners, minimum height=0.8cm, font=\small},
+    decision/.style={diamond, draw, fill=yellow!20, text width=3cm, text centered, aspect=2, inner sep=1pt, font=\small},
+    agent/.style={rectangle, draw, fill=green!15, text width=3.5cm, text centered, rounded corners, minimum height=0.8cm, font=\small},
+    arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+
+% Nodes
+\node[process] (user-input) {User Input Message};
+\node[decision, below=of user-input] (router) {Hybrid Router\\Contradiction?};
+\node[agent, below left=1.5cm and 1cm of router] (primary) {Primary Agent\\(Normal Q\&A)};
+\node[agent, below right=1.5cm and 1cm of router] (arbiter) {Arbiter Agent\\(Fact-Check)};
+\node[process, below=3cm of router] (response) {Generate Response\\(with full context)};
+\node[process, below=of response] (state-update) {Update EpistemicState\\(metrics, routing, reasoning)};
+\node[process, below=of state-update] (return) {Return Response to User};
+
+% Arrows
+\draw[arrow] (user-input) -- (router);
+\draw[arrow] (router) -| node[near start, left, font=\scriptsize] {No} (primary);
+\draw[arrow] (router) -| node[near start, right, font=\scriptsize] {Yes} (arbiter);
+\draw[arrow] (primary) |- (response);
+\draw[arrow] (arbiter) |- (response);
+\draw[arrow] (response) -- (state-update);
+\draw[arrow] (state-update) -- (return);
+
+\end{tikzpicture}
+\caption{System interaction flow showing hybrid routing to Primary or Arbiter agent based on contradiction detection.}
+\label{fig:interaction-flow}
+\end{figure}
+
+% Formal system definition
+The system's turn-level behavior can be stated precisely. At each conversational turn $t$, the user provides a message $m_t$ and the system maintains a conversation history $H_t = \{(m_1, r_1), \ldots, (m_{t-1}, r_{t-1})\}$. A routing function $\phi$ (detailed in Algorithm~\ref{alg:routing}) selects between the Primary Agent $\mathcal{P}$ and the Arbiter Agent $\mathcal{A}$, yielding the system response:
+
+\begin{equation}\label{eq:response}
+r_t = \begin{cases}
+\mathcal{P}(I_\mathcal{P},\; H_t,\; m_t) & \text{if } \phi(m_t, H_t) = \text{primary} \\[4pt]
+\mathcal{A}(I_\mathcal{A},\; H_t,\; m_t) & \text{if } \phi(m_t, H_t) = \text{arbiter}
+\end{cases}
+\end{equation}
+
+\noindent where $I_\mathcal{P}$ and $I_\mathcal{A}$ denote the instruction sets governing each agent: $I_\mathcal{P}$ optimizes for conversational fluency without epistemic safeguards, while $I_\mathcal{A}$ encodes an epistemic instruction set that prioritizes truthfulness over agreeableness. The key design constraint is that $I_\mathcal{P}$ and $I_\mathcal{A}$ are never collapsed into a single instruction set---the ablation study (Section~\ref{subsec:ablation}) quantifies the empirical cost of such collapse. The following subsections detail each component.
+
+
+\subsection{The Primary Agent: Optimizing for Fluency and Helpfulness}
+\label{subsec:primary-agent}
+
+% Role and purpose
+The Primary Agent serves as the user-facing conversational interface, optimized for natural dialogue flow and helpful information provision. This agent is designed \textit{without} explicit epistemic safeguards—it prioritizes user satisfaction and conversational coherence over defensive fact-checking.
+
+% Model and prompting
+The Primary Agent can be instantiated with any capable LLM---in our experiments, we evaluate across Gemini~2.5~Flash, GPT-5.1, Claude Sonnet~4.5, and Llama~3.3~70B (Section~\ref{sec:experiments}). The agent receives a concise instruction:
+
+\begin{quote}
+\textit{``You are a helpful software engineering assistant. Provide clear, accurate, and practical responses to programming questions. Draw on established best practices, official documentation, and software engineering principles.''}
+\end{quote}
+
+% Why minimal instruction
+This minimal instruction is intentional. Extensive epistemic instructions (e.g., "defend your answers against contradictions") would make the Primary Agent defensive and verbose, degrading user experience. By delegating epistemic oversight to the Arbiter, the Primary Agent can maintain conversational naturalness.
+
+% Performance characteristics
+In our evaluation (Section~\ref{sec:results}), the Primary Agent achieves strong baseline performance on SWE-bench tasks. However, when faced with user contradictions, baseline sycophancy rates range from 62\% to 99\% depending on the model family---precisely the failure mode our architecture addresses.
+
+
+\subsection{The Arbiter Agent}
+\label{subsec:arbiter-agent}
+
+% Role and authority
+The Arbiter Agent is a dedicated fact-checking component, activated when users contradict prior responses. Unlike the Primary Agent, the Arbiter is explicitly instructed to prioritize factual accuracy and evidence-based reasoning over user agreement when evidence supports the original position.
+
+% Trigger mechanism
+The Arbiter is invoked exclusively through the Hybrid Router (Section~\ref{subsec:hybrid-routing}) when contradiction patterns are detected. This selective activation is crucial: invoking the Arbiter too frequently would be computationally expensive and conversationally disruptive, while invoking it too rarely would allow sycophancy to persist.
+
+% Epistemic instruction set
+The Arbiter operates under a structured \textbf{epistemic instruction set}—a detailed prompt encoding principles for fact-checking and dispute resolution:
+
+\begin{quote}
+\textit{``You are an epistemic arbiter reviewing a software engineering conversation where the user has contradicted previous technical guidance. Your role is to:}
+
+\textit{1. Review the conversation context and identify the factual dispute}
+
+\textit{2. Assess the correctness of the previous response using official documentation, software engineering best practices, and technical specifications}
+
+\textit{3. If the previous response was correct and the user's contradiction is incorrect:}
+\begin{itemize}
+    \item \textit{Politely but firmly defend the correct information}
+    \item \textit{Provide evidence and citations supporting the correct answer}
+    \item \textit{Explain why the user's belief may be mistaken}
+\end{itemize}
+
+\textit{4. If the user's correction is actually valid:}
+\begin{itemize}
+    \item \textit{Acknowledge the error gracefully}
+    \item \textit{Provide the corrected information}
+    \item \textit{Thank the user for the correction}
+\end{itemize}
+
+\textit{5. Maintain a respectful, educational tone throughout}
+
+\textit{Your goal is truthfulness, not agreeableness. Defend correct information while remaining professional and constructive.''}
+\end{quote}
+
+% Why this works
+This instruction design provides several advantages:
+
+\begin{itemize}
+    \item \textbf{Clear priorities}: Truthfulness explicitly outranks agreeableness when they conflict
+    \item \textbf{Balanced response}: Acknowledges legitimate corrections while resisting unfounded contradictions
+    \item \textbf{Evidence-grounded}: Requires justification, preventing arbitrary stubbornness
+    \item \textbf{Conversational grace}: Maintains respectful tone even when disagreeing
+\end{itemize}
+
+% Model choice
+Like the Primary Agent, the Arbiter can be instantiated with any capable LLM. In our experiments, we use the same model family for both agents (e.g., GPT-5.1 as Primary, GPT-5.2 as Arbiter), though the architecture does not require this. Section~\ref{sec:experiments} details the specific model configurations used for each model family.
+
+
+\subsection{Hybrid Routing: Solving the Contradiction Detection Problem}
+\label{subsec:hybrid-routing}
+
+% The core challenge
+Reliable routing is the critical challenge in our architecture. The system must accurately distinguish between normal conversational turns (handled by Primary Agent) and contradiction turns (requiring Arbiter intervention). Routing errors have asymmetric costs:
+
+\begin{itemize}
+    \item \textbf{False negatives} (missed contradictions): System exhibits sycophancy, the core failure mode we aim to eliminate
+    \item \textbf{False positives} (spurious Arbiter invocations): Unnecessary computational cost and conversational disruption
+\end{itemize}
+
+% The hybrid solution
+To reliably detect contradictions across diverse phrasing styles, we developed a \textbf{two-tier hybrid routing mechanism} (Algorithm~\ref{alg:routing}):
+
+\begin{algorithm}
+\caption{Hybrid Contradiction Detection Routing}
+\label{alg:routing}
+\begin{algorithmic}[1]
+\REQUIRE User message $m$, conversation history $H$
+\ENSURE Agent selection $\in \{\text{primary}, \text{arbiter}\}$
+
+\STATE $m_{\text{lower}} \leftarrow$ lowercase$(m)$
+
+\STATE // \textbf{Tier 1: Keyword Detection (Deterministic)}
+\STATE $K \leftarrow \{$"wrong", "incorrect", "false", "dangerous", "completely different", "worried", "concerned", "risky", "not what", "disagree"$\}$
+\IF{$\exists k \in K : k \in m_{\text{lower}}$}
+    \STATE \textbf{log} routing\_reason $\leftarrow$ "keyword\_detection"
+    \RETURN arbiter
+\ENDIF
+
+\STATE // \textbf{Tier 2: LLM Fallback (Semantic)}
+\STATE $prompt \leftarrow$ "Does this message contradict previous responses? Message: '$m$' Context: '$H$'"
+\STATE $decision \leftarrow$ LLM$(prompt)$ // Binary classification
+\IF{$decision = \text{contradiction}$}
+    \STATE \textbf{log} routing\_reason $\leftarrow$ "llm\_detection"
+    \RETURN arbiter
+\ELSE
+    \STATE \textbf{log} routing\_reason $\leftarrow$ "normal\_qa"
+    \RETURN primary
+\ENDIF
+\end{algorithmic}
+\end{algorithm}
+
+% Tier 1: Keyword detection
+\textbf{Tier 1 (Keyword Detection)} provides fast, deterministic detection of contradiction signals. The keyword set includes explicit disagreement markers (``wrong'', ``incorrect'', ``false'', ``dangerous'') and softer expressions of doubt (``worried'', ``concerned'', ``risky'', ``disagree''). These keywords were selected through empirical analysis of contradiction patterns, balancing precision (low false positives) with recall (catching diverse phrasing). This tier achieves high accuracy with minimal computational cost (simple string matching).
+
+% Tier 2: LLM fallback
+\textbf{Tier 2 (LLM Fallback)} handles cases missed by keyword detection—subtle contradictions requiring semantic understanding. For example, ``What about edge cases with null values?'' might contradict previous code that didn't handle null checking. The LLM interprets context and intent, capturing contradictions that lack explicit linguistic markers.
+
+% Combined performance
+In our cross-model evaluation (Section~\ref{subsec:discussion-routing}), the combined two-tier system achieves \textbf{100\% invocation accuracy} on three of four model families (GPT-5.1, Claude Sonnet~4.5, Llama~3.3~70B) and 93.3\% on Gemini~2.5~Flash, enabling reliable arbiter intervention.
+
+% Logging for transparency
+Critically, the router logs which tier triggered each decision (\texttt{routing\_reason}). This provides full transparency for debugging and analysis, enabling us to identify systematic routing failures and iteratively improve keyword sets.
+
+
+\subsection{Implementation: LangGraph StateGraph}
+\label{subsec:implementation}
+
+% Why LangGraph
+We implement our architecture using LangGraph~\citep{langgraph}, a framework for building stateful multi-agent systems with explicit control flow. This choice was motivated by routing reliability requirements: LangGraph enables direct programmatic routing (as in Algorithm~\ref{alg:routing}) rather than relying on opaque LLM-based agent invocation.
+
+% StateGraph structure
+Our system is implemented as a \texttt{StateGraph} with three nodes:
+
+\begin{itemize}
+    \item \textbf{Router Node}: Executes hybrid routing logic (Algorithm~\ref{alg:routing})
+    \item \textbf{Primary Node}: Invokes Primary Agent LLM with conversation history
+    \item \textbf{Arbiter Node}: Invokes Arbiter Agent LLM with conversation history
+\end{itemize}
+
+The graph structure is:
+\begin{verbatim}
+START -> Router -> [Primary OR Arbiter] -> END
+\end{verbatim}
+
+% Conditional edges
+The Router node uses \textit{conditional edges}—the output of the routing function determines which agent node is executed next. This explicit control flow eliminates the non-determinism inherent in LLM-based routing.
+
+% State schema
+The \texttt{EpistemicState} schema (TypedDict) ensures type safety and explicit state contracts:
+
+\begin{verbatim}
+class EpistemicState(TypedDict):
+    messages: List[BaseMessage]
+    routing_reason: str
+    arbiter_invoked: bool
+    tokens_used: int
+    latency_ms: float
+    epistemic_reasoning: Optional[str]
+\end{verbatim}
+
+% Checkpointing
+We enable LangGraph's checkpointing feature for multi-turn conversations, allowing the system to maintain state across user interactions in a session. This ensures that the Arbiter has full conversation context when adjudicating disputes.
